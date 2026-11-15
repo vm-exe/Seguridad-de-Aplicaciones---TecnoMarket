@@ -1,0 +1,53 @@
+# Endurecimiento de contenedores (riesgo R11). Se aplica sobre el archivo base:
+#   docker compose -f docker-compose.yml -f docker-compose.hardening.yml up -d
+#
+# Aplicar DESPUÉS de capturar la línea base con Trivy y Checkov, para tener
+# evidencia del antes y del después.
+#
+# Si un contenedor no arranca con cap_drop, revisar "docker compose logs <servicio>"
+# y añadir a cap_add solo la capacidad que el error señale.
+
+services:
+  waf:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  wordpress:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 768M
+
+  mariadb:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M

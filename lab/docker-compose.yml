@@ -1,0 +1,133 @@
+# TecnoMarket GT - laboratorio del proyecto final (Seguridad en Aplicaciones, UMG)
+# Tienda ficticia con datos sintéticos. Uso exclusivo en el equipo del grupo.
+#
+# Arranque:   ./init-secrets.sh  &&  docker compose up -d
+# Instalación de WordPress y WooCommerce: ver README.md
+#
+# Redes:
+#   frontend  waf y wordpress. Tiene salida a Internet para descargar plugins.
+#   backend   wordpress y mariadb. Interna: sin ruta al anfitrión ni a Internet.
+# Solo el servicio waf publica puertos.
+
+name: tecnomarket
+
+services:
+  waf:
+    # Para la entrega, sustituir la etiqueta por el digest: owasp/modsecurity-crs@sha256:...
+    image: owasp/modsecurity-crs:nginx
+    restart: unless-stopped
+    depends_on:
+      - wordpress
+    ports:
+      - "80:8080"
+      - "443:8443"
+    environment:
+      SERVERNAME: tecnomarket.local
+      BACKEND: http://wordpress:80
+      # Ronda 1: DetectionOnly (registra sin bloquear). Ronda 2: On (bloquea).
+      MODSEC_RULE_ENGINE: ${MODSEC_RULE_ENGINE:-DetectionOnly}
+      BLOCKING_PARANOIA: "1"
+      ANOMALY_INBOUND: "5"
+      ANOMALY_OUTBOUND: "4"
+      MODSEC_AUDIT_ENGINE: RelevantOnly
+      MODSEC_AUDIT_LOG_FORMAT: JSON
+      MODSEC_AUDIT_LOG: /dev/stdout
+      NGINX_ALWAYS_TLS_REDIRECT: "on"
+      SSL_PROTOCOLS: TLSv1.2 TLSv1.3
+    volumes:
+      - ./waf/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:ro
+      - ./waf/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf:ro
+    networks:
+      - frontend
+
+  wordpress:
+    # Para la entrega, sustituir la etiqueta por el digest.
+    image: wordpress:php8.3-apache
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: mariadb:3306
+      WORDPRESS_DB_NAME: tecnomarket
+      WORDPRESS_DB_USER: tmgt_app
+      WORDPRESS_DB_PASSWORD_FILE: /run/secrets/db_password
+      WORDPRESS_TABLE_PREFIX: tm_
+      WORDPRESS_CONFIG_EXTRA: |
+        define( 'DISALLOW_FILE_EDIT', true );
+        define( 'FORCE_SSL_ADMIN', true );
+        define( 'WP_DEBUG', false );
+        define( 'DISABLE_WP_CRON', true );
+    secrets:
+      - db_password
+    volumes:
+      - wp_data:/var/www/html
+      # Descomentar cuando exista el complemento propio:
+      # - ./plugin/tmgt-pedidos:/var/www/html/wp-content/plugins/tmgt-pedidos:ro
+    networks:
+      - frontend
+      - backend
+
+  mariadb:
+    # Para la entrega, sustituir la etiqueta por el digest.
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: tecnomarket
+      MARIADB_USER: tmgt_app
+      MARIADB_PASSWORD_FILE: /run/secrets/db_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+    secrets:
+      - db_password
+      - db_root_password
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - backend
+    # Sin "ports": la base de datos no se publica en el anfitrión.
+
+  # Herramienta de administración. Solo se ejecuta bajo demanda:
+  #   docker compose --profile setup run --rm wpcli <comando>
+  wpcli:
+    image: wordpress:cli-php8.3
+    profiles: ["setup"]
+    user: "33:33"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: mariadb:3306
+      WORDPRESS_DB_NAME: tecnomarket
+      WORDPRESS_DB_USER: tmgt_app
+      WORDPRESS_DB_PASSWORD_FILE: /run/secrets/db_password
+      WORDPRESS_TABLE_PREFIX: tm_
+    secrets:
+      - db_password
+    volumes:
+      - wp_data:/var/www/html
+    networks:
+      - frontend
+      - backend
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+
+volumes:
+  wp_data:
+  db_data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  db_root_password:
+    file: ./secrets/db_root_password.txt
