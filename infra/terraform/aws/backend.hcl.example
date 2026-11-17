@@ -1,0 +1,8 @@
+# Copiar a backend.hcl (no versionar) y ejecutar: terraform init -backend-config=backend.hcl
+# El bucket y la clave KMS se crean una sola vez, fuera de este stack (bootstrap).
+bucket       = "ventas-segura-tfstate-<id-cuenta>"
+key          = "prod/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+kms_key_id   = "alias/ventas-segura-tfstate"
+use_lockfile = true # bloqueo nativo en S3 (Terraform >= 1.10); alternativa: dynamodb_table

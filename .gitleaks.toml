@@ -1,0 +1,34 @@
+# Configuración de Gitleaks: reglas por defecto + excepciones ACOTADAS y justificadas.
+# Gitleaks la carga automáticamente (CI y local). Cada excepción indica por qué no es un secreto.
+title = "ventas-online-segura"
+
+[extend]
+useDefault = true
+
+# 1) Artefactos generados o locales que nunca se versionan (.gitignore).
+#    Se excluyen para que el escaneo en modo carpeta (laboratorio) no se llene de ruido.
+#    OJO: .env.local y .env.docker NO se excluyen: contienen secretos reales y Gitleaks
+#    DEBE detectarlos (por eso están en .gitignore y nunca llegan al repositorio).
+[[allowlists]]
+description = "Artefactos generados (build, reportes, pruebas)"
+paths = [
+  '''(^|/)\.next/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)reportes/''',
+  '''(^|/)playwright-report/''',
+  '''(^|/)test-results/''',
+  '''(^|/)e2e/\.auth/''',
+]
+
+# 2) Valores de ejemplo en las plantillas de configuración (.env.example, .env.docker.example).
+[[allowlists]]
+description = "Marcadores CAMBIAR_* de las plantillas de entorno"
+regexTarget = "match"
+regexes = ['''CAMBIAR[_A-Za-z0-9]*''']
+
+# 3) Lista de contraseñas comunes PROHIBIDAS (validación de registro), no credenciales.
+[[allowlists]]
+description = "Lista de contraseñas débiles rechazadas en src/lib/validation.ts"
+paths = ['''src/lib/validation\.ts''']
+regexTarget = "line"
+regexes = ['''COMUNES = new Set''']

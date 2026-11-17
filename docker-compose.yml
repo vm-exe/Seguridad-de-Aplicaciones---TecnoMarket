@@ -1,0 +1,171 @@
+# =============================================================================
+# Entorno contenerizado local (simula la arquitectura cloud):
+#   Internet -> [waf: Nginx + ModSecurity + OWASP CRS] -> [app: Next.js] -> [db: MySQL 8.4]
+# Sólo el WAF publica puertos. La red "backend" es interna (sin salida a Internet).
+# Uso:
+#   cp .env.docker.example .env.docker   (y completar valores)
+#   docker compose up -d --build
+#   docker compose --profile migrate run --rm migrate
+# =============================================================================
+name: ventas-online-segura
+
+services:
+  waf:
+    # Fijar por digest en producción: owasp/modsecurity-crs@sha256:...
+    image: owasp/modsecurity-crs:4.25-nginx-alpine-lts
+    container_name: ventas-waf
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      BACKEND: http://app:3000
+      PORT: "8080"
+      SERVER_NAME: localhost
+      SERVER_TOKENS: "off"
+      PROXY_TIMEOUT: 60s
+      MODSEC_RULE_ENGINE: "On"
+      MODSEC_AUDIT_ENGINE: RelevantOnly
+      MODSEC_AUDIT_LOG_FORMAT: JSON
+      MODSEC_AUDIT_LOG: /dev/stdout
+      MODSEC_REQ_BODY_LIMIT: "5242880"
+      BLOCKING_PARANOIA: "2"
+      DETECTION_PARANOIA: "2"
+      ANOMALY_INBOUND: "5"
+      ANOMALY_OUTBOUND: "4"
+      ALLOWED_METHODS: "GET HEAD POST OPTIONS PUT PATCH DELETE"
+      MAX_FILE_SIZE: "5242880"
+      COMBINED_FILE_SIZES: "10485760"
+      NGINX_ALWAYS_TLS_REDIRECT: "off" # en local sin TLS; en cloud TLS termina en el ALB
+      SET_REAL_IP_FROM: 0.0.0.0/0
+    volumes:
+      - ./infra/waf/nginx/default.conf.template:/etc/nginx/templates/conf.d/default.conf.template:ro
+      - ./infra/waf/nginx/limits.conf.template:/etc/nginx/templates/conf.d/limits.conf.template:ro
+      - ./infra/waf/modsecurity/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:ro
+      - ./infra/waf/modsecurity/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    # El healthcheck de la imagen consulta https://localhost:8443; aquí el WAF solo
+    # escucha HTTP en 8080 (en la nube el TLS termina en el balanceador).
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs -A healthcheck http://localhost:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks: [frontend]
+    security_opt: ["no-new-privileges:true"]
+
+  app:
+    build:
+      context: .
+      target: runner
+    image: ventas-online-segura:local
+    container_name: ventas-app
+    restart: unless-stopped
+    env_file: .env.docker
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+      UPLOAD_DIR: /data/uploads
+      TRUST_PROXY: "true"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+      - /app/.next/cache:size=128m,nosuid
+    volumes:
+      - uploads:/data/uploads
+      # Buzón de laboratorio: con MAIL_CAPTURE_DIR=/data/correos los correos (activación,
+      # recuperación) se guardan como JSON en ./reportes/correos en lugar de enviarse.
+      - ./reportes/correos:/data/correos
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 768m
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [frontend, backend]
+    # Sin "ports": la app NO es accesible directamente, sólo a través del WAF.
+
+  migrate:
+    build:
+      context: .
+      target: migrator
+    image: ventas-online-segura-migrator:local
+    profiles: ["migrate"]
+    env_file: .env.docker
+    # Usa MIGRATOR_DATABASE_URL (usuario con permisos DDL) sólo en este job
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+
+  # Tareas administrativas dentro de la red interna (la BD no se expone al host):
+  #   docker compose --profile tareas run --rm tareas npx tsx --conditions=react-server scripts/seed.ts
+  #   docker compose --profile tareas run --rm -e ADMIN_PASSWORD=... tareas npx tsx --conditions=react-server scripts/crear-admin.ts correo "Nombre"
+  tareas:
+    build:
+      context: .
+      target: deps
+    image: ventas-online-segura-tareas:local
+    profiles: ["tareas"]
+    env_file: .env.docker
+    working_dir: /app
+    volumes:
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+
+  db:
+    image: mysql:8.4
+    container_name: ventas-db
+    restart: unless-stopped
+    env_file: .env.docker
+    command:
+      - --require-secure-transport=OFF # en cloud (RDS) se exige TLS
+      - --local-infile=0
+      - --skip-name-resolve
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - dbdata:/var/lib/mysql
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+    # Sin "ports": la base de datos no se expone al host.
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+
+volumes:
+  uploads:
+  dbdata:

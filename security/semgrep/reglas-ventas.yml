@@ -1,0 +1,136 @@
+# =============================================================================
+# Reglas SAST propias para "Ventas Online Segura" (Semgrep)
+# Cada regla corresponde a una vulnerabilidad encontrada en el sistema PHP legado
+# para evitar su reintroducción (regresión de seguridad).
+# Ejecutar: semgrep scan --config security/semgrep/ src/
+# =============================================================================
+rules:
+  - id: ventas-xss-dangerously-set-inner-html
+    message: >-
+      Uso de dangerouslySetInnerHTML: desactiva el escape automático de React (XSS, CWE-79).
+      El sistema legado imprimía descripciones de producto sin escapar. Renderizar texto plano.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: "CWE-79"
+      owasp: "A03:2021 / A05:2025 - Injection"
+      legado: "detalles.php echo $descripcion"
+    pattern-either:
+      - pattern: <$EL dangerouslySetInnerHTML={...} />
+      - pattern: "{dangerouslySetInnerHTML: ...}"
+
+  - id: ventas-sqli-raw-sql
+    message: >-
+      SQL construido con sql.raw() o concatenación/plantillas: riesgo de inyección SQL (CWE-89).
+      Usar el query builder de Drizzle o el template `sql` con parámetros.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: "CWE-89"
+      legado: "admin/productos/procesar.php, borrar.php"
+    pattern-either:
+      - pattern: sql.raw(...)
+      - pattern: $DB.execute("..." + $X)
+      - pattern: $DB.query("..." + $X)
+      - pattern: $CONN.query(`...${$X}...`)
+      - pattern: $CONN.execute(`...${$X}...`)
+
+  - id: ventas-insecure-random-token
+    message: >-
+      Math.random() no es criptográficamente seguro. Para tokens, IDs de sesión o códigos usar
+      crypto.randomBytes / crypto.randomUUID (CWE-338). El legado usaba md5(uniqid(mt_rand())).
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: "CWE-338"
+      legado: "clienteFunciones.php generarToken()"
+    pattern: Math.random()
+
+  - id: ventas-precio-desde-cliente
+    message: >-
+      Se lee un monto/precio/total desde la petición del cliente. El total DEBE calcularse en el
+      servidor a partir de la base de datos (CWE-602, manipulación de precios). El legado
+      registraba el monto enviado por el navegador en clases/capture.php.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: "CWE-602"
+      legado: "clases/capture.php $datos['detalles']['purchase_units'][0]['amount']['value']"
+    patterns:
+      - pattern-either:
+          - pattern: $B.$F
+          - pattern: $B.get("$F")
+      # Sólo objetos que provienen del cliente (cuerpo, formulario, parámetros)
+      - metavariable-regex:
+          metavariable: $B
+          regex: (?i)^(body|data|input|payload|json|req|request|params|args|formData|fd|searchParams)$
+      - metavariable-regex:
+          metavariable: $F
+          regex: (?i)^(total|precio|price|amount|monto|subtotal)$
+    paths:
+      include:
+        - "**/checkout/**"
+        - "**/pagos/**"
+        - "**/pago/**"
+        - "**/orders/**"
+        # Lógica de pagos real de este proyecto (antes quedaba fuera del alcance de la regla)
+        - "**/ordenes*"
+        - "**/paypal*"
+        - "**/acciones-pago*"
+        - "**/carrito*"
+
+  - id: ventas-log-de-secretos
+    message: >-
+      Posible registro de credenciales o secretos en logs (CWE-532). Nunca loguear passwords,
+      tokens, claves ni el objeto completo de la petición.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: "CWE-532"
+    patterns:
+      - pattern-either:
+          - pattern: console.$LOG(..., $X, ...)
+          - pattern: logger.$LOG(..., $X, ...)
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?i).*(password|passwd|secret|token|apikey|api_key|clientsecret|authorization).*
+
+  - id: ventas-eval-o-new-function
+    message: Ejecución dinámica de código (eval / new Function) - CWE-95.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: "CWE-95"
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+
+  - id: ventas-secreto-hardcodeado
+    message: >-
+      Secreto en el código fuente (CWE-798). El legado tenía KEY_TOKEN/KEY_CIFRADO "Tr1f0rc3&"
+      y root sin contraseña. Usar variables de entorno / Secrets Manager.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: "CWE-798"
+    patterns:
+      - pattern: const $K = "$V"
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i).*(secret|password|key_token|clave|api_key|private_key).*
+      - metavariable-regex:
+          metavariable: $V
+          regex: .{6,}
+
+  - id: ventas-redirect-abierto
+    message: >-
+      Redirección construida desde parámetros del usuario (open redirect, CWE-601).
+      Validar contra una lista de rutas internas permitidas.
+    severity: WARNING
+    languages: [typescript, javascript]
+    metadata:
+      cwe: "CWE-601"
+    pattern-either:
+      - pattern: redirect($SP.get(...))
+      - pattern: redirect($SP.$X)
+      - pattern: NextResponse.redirect(new URL($REQ.nextUrl.searchParams.get(...), ...))

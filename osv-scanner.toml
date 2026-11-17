@@ -1,0 +1,7 @@
+# Excepciones documentadas para OSV-Scanner (gate del job "sca").
+# Cada excepción debe tener: ID, fecha de expiración y justificación (aceptación formal del riesgo).
+# Ejemplo:
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = 2027-01-31
+# reason = "Dependencia solo de desarrollo (drizzle-kit); no llega a la imagen de producción."

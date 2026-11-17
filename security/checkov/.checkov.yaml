@@ -1,0 +1,8 @@
+# Configuración de Checkov (IaC). Las excepciones se documentan INLINE en cada
+# recurso con "#checkov:skip=<ID>:<justificación>" para que sean auditables.
+compact: true
+quiet: false
+skip-path:
+  - node_modules
+  - .next
+download-external-modules: false

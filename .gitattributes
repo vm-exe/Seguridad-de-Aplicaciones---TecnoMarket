@@ -1,0 +1,16 @@
+# Normalizar finales de línea. Los archivos que se ejecutan o se montan en
+# contenedores Linux DEBEN quedar en LF aunque el repo se clone en Windows
+# (con CRLF, "#!/bin/bash\r" y las plantillas de nginx/ModSecurity fallan).
+* text=auto
+*.sh text eol=lf
+*.conf text eol=lf
+*.template text eol=lf
+*.sql text eol=lf
+*.tf text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+.env*.example text eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,11 @@
+# Copiar a terraform.tfvars (NO versionar). Valores de ejemplo.
+project             = "ventas-segura"
+environment         = "prod"
+owner               = "equipo-seguridad"
+region              = "us-east-1"
+domain_name         = "tienda.ejemplo.com"
+acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+container_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/ventas-segura@sha256:REEMPLAZAR"
+alarm_email         = "seguridad@ejemplo.com"
+db_multi_az         = false # true en producción real
+admin_allowed_cidrs = []    # ej. ["203.0.113.10/32"]

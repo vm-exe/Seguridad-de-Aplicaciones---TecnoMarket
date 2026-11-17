@@ -1,0 +1,29 @@
+# Zonas de rate limiting (contexto http). Mitiga fuerza bruta / credential stuffing
+# y registro masivo de cuentas (casos de abuso AC-01 y AC-02).
+limit_req_zone $binary_remote_addr zone=auth_login:10m  rate=5r/m;
+limit_req_zone $binary_remote_addr zone=auth_signup:10m rate=3r/m;
+limit_req_zone $binary_remote_addr zone=auth_reset:10m  rate=3r/m;
+limit_req_zone $binary_remote_addr zone=general:20m     rate=30r/s;
+
+# Server Actions de la interfaz (POST a /login, /login/2fa, /registro, /recuperar, /restablecer).
+# La clave queda vacía en GET/HEAD, así que la navegación normal no se limita
+# (nginx no contabiliza solicitudes con clave vacía).
+map $request_method $clave_post_auth {
+    POST    $binary_remote_addr;
+    default "";
+}
+limit_req_zone $clave_post_auth zone=auth_ui:10m rate=10r/m;
+limit_conn_zone $binary_remote_addr zone=perip:10m;
+
+# CSP de respaldo para respuestas que no vienen de la app (403 de ModSecurity, 429, 5xx del proxy).
+# Si el backend ya envió su CSP (con nonce), el valor queda vacío y nginx no agrega nada.
+map $upstream_http_content_security_policy $csp_respaldo {
+    ""      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+    default "";
+}
+
+limit_req_status 429;
+limit_conn_status 429;
+
+# Ocultar versión de Nginx
+server_tokens off;

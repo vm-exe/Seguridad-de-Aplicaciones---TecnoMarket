@@ -1,0 +1,1 @@
+ALTER TABLE `ordenes` MODIFY COLUMN `estado` enum('pendiente','procesando','pagada','cancelada','fallida','reembolsada') NOT NULL DEFAULT 'pendiente';

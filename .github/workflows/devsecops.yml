@@ -1,0 +1,386 @@
+# =============================================================================
+# Pipeline DevSecOps - Ventas Online Segura
+#   build-test -> sast / secrets / sca / iac / e2e -> container -> dast
+# Fases del curso: 3 (SAST, SCA, codificación segura), 4 (DAST), 5 (contenedores, IaC)
+#
+# Cadena de suministro: cada acción está fijada por SHA de commit completo (40 caracteres)
+# con la versión en un comentario; las imágenes de herramientas, por digest sha256.
+# Dependabot (.github/dependabot.yml) propone las actualizaciones con 7 días de espera.
+# =============================================================================
+name: devsecops
+
+on:
+  push:
+    branches: [main, proyecto]
+  pull_request:
+    branches: [main, proyecto]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # escaneo semanal (nuevos CVE en dependencias/imagen)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devsecops-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  IMAGE_NAME: ventas-online-segura
+
+jobs:
+  # ---------------------------------------------------------------------------
+  build-test:
+    name: Build, lint, typecheck y pruebas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test --if-present
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  # ---------------------------------------------------------------------------
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    container:
+      image: semgrep/semgrep:1.140.0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Semgrep (OWASP Top 10 + reglas propias)
+        run: |
+          semgrep scan \
+            --config p/owasp-top-ten \
+            --config p/typescript \
+            --config p/react \
+            --config p/nextjs \
+            --config p/secrets \
+            --config security/semgrep/ \
+            --exclude node_modules --exclude .next \
+            --sarif --output semgrep.sarif \
+            --error --severity ERROR
+      - name: Publicar SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # ---------------------------------------------------------------------------
+  secrets:
+    name: Detección de secretos (Gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.28.0@sha256:bf00b5e039f0fad4b32935dc5ec1e358f227ccd097bcb64b971f0331072fe2ae \
+            detect --source /repo --redact --verbose --exit-code 1
+
+  # ---------------------------------------------------------------------------
+  sca:
+    name: SCA (npm audit, OSV-Scanner, SBOM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Integridad del lockfile (solo registro npm, solo HTTPS)
+        run: npx --yes lockfile-lint@4 --path package-lock.json --type npm --allowed-hosts npm --validate-https
+      - run: npm ci --ignore-scripts
+      - name: npm audit (dependencias de producción, falla en HIGH/CRITICAL)
+        run: npm audit --omit=dev --audit-level=high
+      - name: OSV-Scanner (base OSV.dev / GHSA)
+        id: osv
+        run: |
+          set +e
+          docker run --rm -v "$PWD:/src" ghcr.io/google/osv-scanner:v2.2.2@sha256:fd62daecbaaed24442031574540e8af6dbaf0ab0a3e28c626bec0dd235a28346 \
+            scan source --config /src/osv-scanner.toml --lockfile /src/package-lock.json --format sarif --output /src/osv.sarif
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+      - name: Publicar SARIF OSV
+        if: always() && hashFiles('osv.sarif') != ''
+        uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+        with:
+          sarif_file: osv.sarif
+          category: osv-scanner
+      - name: Gate OSV (falla si hay vulnerabilidades no aceptadas en osv-scanner.toml)
+        run: |
+          rc="${{ steps.osv.outputs.rc }}"
+          if [ "$rc" != "0" ]; then echo "OSV-Scanner encontró vulnerabilidades (código $rc)"; exit 1; fi
+      - name: SBOM CycloneDX
+        run: npx --yes @cyclonedx/cyclonedx-npm@4 --omit dev --output-file sbom.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  # ---------------------------------------------------------------------------
+  iac:
+    name: IaC (Checkov - Terraform, Dockerfile, Compose)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@3f0caf0c3aa9f56ade6b49f6e60b63aaeafb75a3 # v12.3141.0
+        with:
+          directory: .
+          framework: terraform,dockerfile,docker_compose,github_actions,secrets
+          skip_path: node_modules
+          config_file: security/checkov/.checkov.yaml
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
+          soft_fail: false
+      - name: Publicar SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+        with:
+          sarif_file: checkov.sarif
+          category: checkov
+
+  # ---------------------------------------------------------------------------
+  container:
+    name: Escaneo de imagen (Trivy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [build-test]
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Build imagen
+        run: docker build --target runner -t $IMAGE_NAME:${{ github.sha }} .
+      - name: Trivy (SARIF para GitHub Security)
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
+      - name: Publicar SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+      - name: SBOM de la imagen (CycloneDX, incluye paquetes del SO base)
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: cyclonedx
+          output: sbom-imagen.cdx.json
+          scan-type: image
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-imagen
+          path: sbom-imagen.cdx.json
+      - name: Trivy gate (falla en CRITICAL/HIGH con parche disponible)
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          scanners: vuln,secret,misconfig
+
+  # ---------------------------------------------------------------------------
+  # Pruebas E2E de seguridad (caja gris) contra la app directa, SIN el WAF:
+  # detrás del WAF los límites de tasa por IP se activarían con los muchos logins de la suite.
+  e2e:
+    name: E2E de seguridad (Playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    needs: [build-test]
+    services:
+      mysql:
+        image: mysql:8.4@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
+        env:
+          MYSQL_DATABASE: ventas_segura
+          # Contraseña de root efímera: la BD solo existe en este runner y se destruye al terminar.
+          MYSQL_ROOT_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}-raiz
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      ROOT_PW: ${{ github.run_id }}-${{ github.run_attempt }}-raiz
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Usuarios de BD con mínimo privilegio y .env.local efímero
+        run: |
+          rnd() { openssl rand -base64 32; }
+          APP_PW=$(openssl rand -hex 24); MIG_PW=$(openssl rand -hex 24)
+          echo "::add-mask::$APP_PW"; echo "::add-mask::$MIG_PW"
+          mysql -h 127.0.0.1 -uroot -p"$ROOT_PW" <<SQL
+          CREATE USER 'ventas_app'@'%' IDENTIFIED BY '${APP_PW}';
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ventas_segura.* TO 'ventas_app'@'%';
+          CREATE USER 'ventas_migrator'@'%' IDENTIFIED BY '${MIG_PW}';
+          GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX, REFERENCES ON ventas_segura.* TO 'ventas_migrator'@'%';
+          FLUSH PRIVILEGES;
+          SQL
+          cat > .env.local <<ENV
+          DATABASE_URL=mysql://ventas_app:${APP_PW}@127.0.0.1:3306/ventas_segura
+          MIGRATOR_DATABASE_URL=mysql://ventas_migrator:${MIG_PW}@127.0.0.1:3306/ventas_segura
+          APP_URL=http://localhost:3000
+          BETTER_AUTH_SECRET=$(rnd)
+          FIELD_ENCRYPTION_KEY=$(rnd)
+          HMAC_KEY=$(rnd)
+          PAYMENT_MODE=simulado
+          ALLOW_SIMULATED_PAYMENTS=true
+          TRUST_PROXY=true
+          PASSWORD_BREACH_CHECK=false
+          MAIL_CAPTURE_DIR=./reportes/correos
+          UPLOAD_DIR=./uploads
+          ENV
+          sed -i 's/^ *//' .env.local
+      - run: npm ci --ignore-scripts
+      - name: Migraciones y datos de ejemplo
+        run: |
+          npm run db:migrate:local
+          npm run db:seed
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+      - name: Iniciar la app (producción) y esperar readiness
+        run: |
+          set -a; . ./.env.local; set +a
+          NODE_ENV=production nohup npx next start -p 3000 > app.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS "http://localhost:3000/api/health?db=1" && exit 0
+            sleep 2
+          done
+          cat app.log
+          exit 1
+      - name: Playwright (navegador)
+        run: npx playwright install --with-deps chromium
+      - name: E2E (login + 2FA, IDOR, control de acceso, CSRF, XSS, checkout, rate limit)
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          E2E_MAILBOX_DIR: ./reportes/correos
+          E2E_CREAR_ADMIN: "1"
+        run: npm run test:e2e
+      - name: Log de la app
+        if: always()
+        run: cat app.log || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  dast:
+    name: DAST (OWASP ZAP baseline vía WAF)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [container, sast, sca]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Generar .env.docker efímero (secretos aleatorios, sólo CI)
+        run: |
+          rnd() { openssl rand -base64 32; }
+          pw() { openssl rand -hex 24; }
+          APP_PW=$(pw); MIG_PW=$(pw)
+          cp .env.docker.example .env.docker
+          sed -i \
+            -e "s|^MYSQL_ROOT_PASSWORD=.*|MYSQL_ROOT_PASSWORD=$(pw)|" \
+            -e "s|^APP_DB_PASSWORD=.*|APP_DB_PASSWORD=${APP_PW}|" \
+            -e "s|^MIGRATOR_DB_PASSWORD=.*|MIGRATOR_DB_PASSWORD=${MIG_PW}|" \
+            -e "s|^DATABASE_URL=.*|DATABASE_URL=mysql://ventas_app:${APP_PW}@db:3306/ventas_segura|" \
+            -e "s|^MIGRATOR_DATABASE_URL=.*|MIGRATOR_DATABASE_URL=mysql://ventas_migrator:${MIG_PW}@db:3306/ventas_segura|" \
+            -e "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$(rnd)|" \
+            -e "s|^FIELD_ENCRYPTION_KEY=.*|FIELD_ENCRYPTION_KEY=$(rnd)|" \
+            -e "s|^HMAC_KEY=.*|HMAC_KEY=$(rnd)|" \
+            -e "s|^PAYMENT_MODE=.*|PAYMENT_MODE=simulado|" \
+            -e "s|^ALLOW_SIMULATED_PAYMENTS=.*|ALLOW_SIMULATED_PAYMENTS=true|" \
+            .env.docker
+      - name: Levantar entorno (waf + app + db)
+        run: |
+          docker compose up -d db
+          docker compose --profile migrate run --rm migrate
+          docker compose up -d --build waf app
+      - name: Esperar health
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8080/api/health && exit 0
+            sleep 3
+          done
+          docker compose logs app waf
+          exit 1
+      - name: Datos de prueba (catálogo mínimo para que ZAP recorra la tienda)
+        run: |
+          docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' < infra/db/seed-ci.sql
+      - name: ZAP baseline (caja negra, pasivo)
+        uses: zaproxy/action-baseline@7c4deb10e6261301961c86d65d54a516394f9aed # v0.14.0
+        with:
+          target: http://localhost:8080
+          rules_file_name: security/zap/rules.tsv
+          cmd_options: "-a -j"
+          allow_issue_writing: false
+          fail_action: true
+          artifact_name: zap-baseline-report
+      - name: Logs del WAF (evidencia ModSecurity)
+        if: always()
+        run: docker compose logs waf > waf.log 2>&1 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: waf-logs
+          path: waf.log
+      - name: Apagar entorno
+        if: always()
+        run: docker compose down -v

@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+@theme {
+  --color-marca: #3b5d50;
+  --color-marca-oscuro: #2f4a40;
+  --color-acento: #f9bf29;
+  --color-crema: #eff2f1;
+  --color-tinta: #2f2f2f;
+  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+}
+
+body {
+  background: #fff;
+  color: var(--color-tinta);
+}
+
+/* En Tailwind v4, una clase propia que se reutiliza con @apply debe declararse con @utility. */
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-full px-6 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@layer components {
+  .btn-primario {
+    @apply btn bg-tinta text-white hover:bg-black;
+  }
+  .btn-marca {
+    @apply btn bg-marca text-white hover:bg-marca-oscuro;
+  }
+  .btn-acento {
+    @apply btn bg-acento text-tinta hover:brightness-95;
+  }
+  .btn-borde {
+    @apply btn border border-tinta text-tinta hover:bg-tinta hover:text-white;
+  }
+  .btn-peligro {
+    @apply btn bg-red-700 text-white hover:bg-red-800;
+  }
+  .campo {
+    @apply w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-marca focus:ring-2 focus:ring-marca/20;
+  }
+  .etiqueta {
+    @apply mb-1 block text-sm font-medium text-gray-700;
+  }
+  .tarjeta {
+    @apply rounded-2xl border border-gray-200 bg-white p-6 shadow-sm;
+  }
+  .contenedor {
+    @apply mx-auto w-full max-w-6xl px-4;
+  }
+  .tabla {
+    @apply w-full text-left text-sm;
+  }
+  .tabla th {
+    @apply border-b border-gray-200 px-3 py-2 font-semibold text-gray-600;
+  }
+  .tabla td {
+    @apply border-b border-gray-100 px-3 py-2 align-middle;
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "name": "ventas-online-segura",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:seed": "tsx --conditions=react-server --env-file=.env.local scripts/seed.ts",
+    "db:migrar-legado": "tsx --conditions=react-server --env-file=.env.local scripts/migrar-legado.ts",
+    "admin:crear": "tsx --conditions=react-server --env-file=.env.local scripts/crear-admin.ts",
+    "auditoria:verificar": "tsx --conditions=react-server --env-file=.env.local scripts/verificar-auditoria.ts",
+    "db:migrate:local": "node --env-file=.env.local node_modules/drizzle-kit/bin.cjs migrate",
+    "db:generate:local": "node --env-file=.env.local node_modules/drizzle-kit/bin.cjs generate",
+    "pagos:conciliar": "tsx --conditions=react-server --env-file=.env.local scripts/conciliar-pagos.ts",
+    "test:cobertura": "vitest run --coverage",
+    "e2e:limpiar": "tsx --conditions=react-server --env-file=.env.local scripts/limpiar-e2e.ts"
+  },
+  "dependencies": {
+    "better-auth": "^1.7.25",
+    "drizzle-orm": "^0.45.4",
+    "mysql2": "^3.24.6",
+    "next": "^16.4.6",
+    "nodemailer": "^10.6.0",
+    "qrcode": "^1.5.4",
+    "react": "19.2",
+    "react-dom": "19.2",
+    "server-only": "^0.0.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22.20.5",
+    "@types/nodemailer": "^8.0.2",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^5.1.0",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^9",
+    "eslint-config-next": "^16.4.6",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.10"
+    }
+  },
+  "engines": {
+    "node": ">=22 <23"
+  }
+}

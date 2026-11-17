@@ -1,0 +1,115 @@
+# =============================================================================
+# Reverse proxy + WAF (imagen owasp/modsecurity-crs:*-nginx). Las variables
+# ${...} se sustituyen con envsubst al iniciar el contenedor; las variables
+# de Nginx ($host, $remote_addr...) se mantienen.
+# ModSecurity + CRS se cargan desde la configuración base de la imagen.
+# =============================================================================
+server {
+    listen ${PORT} default_server;
+    server_name ${SERVER_NAME};
+
+    modsecurity on;
+
+    client_max_body_size 5m;
+    client_body_timeout 10s;
+    client_header_timeout 10s;
+    keepalive_timeout 30s;
+    limit_conn perip 30;
+
+    # --- Cabeceras de seguridad (defensa en profundidad) ---
+    # La app (next.config.ts) también las emite. Para no enviarlas duplicadas (o con
+    # valores distintos), el WAF oculta las del backend y emite una sola versión
+    # canónica: así quedan garantizadas aunque la app dejara de enviarlas.
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Referrer-Policy;
+    proxy_hide_header Permissions-Policy;
+    proxy_hide_header Cross-Origin-Opener-Policy;
+    proxy_hide_header Strict-Transport-Security;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(self)" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    # Mismo valor que next.config.ts. HSTS solo tiene efecto bajo HTTPS (en cloud el ALB termina TLS).
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    # La CSP (con nonce por solicitud) la emite la app. Si la respuesta NO la trae
+    # (p. ej. un 403 generado por ModSecurity), el WAF agrega una CSP restrictiva de
+    # respaldo; con valor vacío nginx no emite la cabecera, así que nunca se duplica.
+    add_header Content-Security-Policy $csp_respaldo always;
+
+    proxy_hide_header X-Powered-By;
+    proxy_hide_header Server;
+    more_clear_headers Server;   # módulo headers-more incluido en la imagen CRS
+
+    # Cabeceras hacia el backend (la app confía en ellas sólo si TRUST_PROXY=true)
+    proxy_http_version 1.1;
+    # $http_host conserva el puerto (localhost:8080). Next.js compara X-Forwarded-Host
+    # con el Origin de cada Server Action (protección CSRF); con $host (sin puerto)
+    # rechazaba TODAS las acciones legítimas con "Invalid Server Actions request".
+    proxy_set_header Host              $http_host;
+    # Se SOBRESCRIBEN (no se concatenan) para que el cliente no pueda falsificar su IP.
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $http_host;
+    proxy_set_header Connection        "";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout ${PROXY_TIMEOUT};
+
+    # --- Endpoints de autenticación con límite estricto ---
+    location = /api/auth/sign-in/email {
+        limit_req zone=auth_login burst=3 nodelay;
+        proxy_pass ${BACKEND};
+    }
+    location ^~ /api/auth/sign-up {
+        limit_req zone=auth_signup burst=2 nodelay;
+        proxy_pass ${BACKEND};
+    }
+    location ^~ /api/auth/request-password-reset {
+        limit_req zone=auth_reset burst=2 nodelay;
+        proxy_pass ${BACKEND};
+    }
+    location ^~ /api/auth/two-factor {
+        limit_req zone=auth_login burst=5 nodelay;
+        proxy_pass ${BACKEND};
+    }
+
+    # Interfaz de autenticación (Server Actions de Next.js): límite estricto solo para POST.
+    location ~ ^/(login|login/2fa|registro|recuperar|restablecer)/?$ {
+        limit_req zone=auth_ui burst=5 nodelay;
+        limit_req zone=general burst=150 nodelay;
+        proxy_pass ${BACKEND};
+    }
+
+    # --- Panel de administración ---
+    # Ejemplo (descomentar en producción) para restringir por IP/VPN:
+    # location ^~ /admin {
+    #     allow 10.0.0.0/8;      # red corporativa / VPN
+    #     deny  all;
+    #     limit_req zone=general burst=20;
+    #     proxy_pass ${BACKEND};
+    # }
+
+    # --- Bloqueo de rutas sensibles que nunca deben servirse ---
+    location ~ /\.(?!well-known) { return 404; }
+    location ~* \.(env|git|sql|bak|old|swp|tfstate)$ { return 404; }
+
+    # --- Archivos estáticos de Next.js (inmutables, con hash en el nombre) ---
+    # Sin limit_req: una sola página carga decenas de chunks en paralelo.
+    location ^~ /_next/static/ {
+        proxy_pass ${BACKEND};
+    }
+
+    # --- Resto de la aplicación ---
+    # Ráfaga amplia: Next.js precarga en paralelo los enlaces visibles (?_rsc=).
+    # Con burst=40 se observaron 429 a usuarios legítimos al pagar (laboratorio).
+    # La mitigación de DoS volumétrico corresponde al perímetro (AWS WAF / Shield).
+    location / {
+        limit_req zone=general burst=150 nodelay;
+        proxy_pass ${BACKEND};
+    }
+
+    # Healthcheck propio del WAF (/healthz) provisto por la imagen
+    include includes/location_common.conf;
+}
