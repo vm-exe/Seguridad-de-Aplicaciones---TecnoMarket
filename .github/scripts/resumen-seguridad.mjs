@@ -140,3 +140,16 @@ lineas.push("- **Fases del curso:** 3 = codificación segura, SAST y SCA · 4 = 
 
 appendFileSync(env.GITHUB_STEP_SUMMARY, lineas.join("\n") + "\n");
 console.log(lineas.join("\n"));
+
+// Veredicto en una línea como anotación: aparece arriba en la página del run.
+const linea =
+  `${aprobados.length}/${controles.length} controles aprobados · ` +
+  `SAST ${v("sast", "hallazgos")} hallazgos · Secretos ${v("secrets", "hallazgos")} · ` +
+  `SCA ${v("sca", "audit_total")} vulns · IaC ${v("iac", "aprobados")} ok/${v("iac", "fallidos")} fallidos · ` +
+  `Trivy app ${v("container", "app_criticas")}C/${v("container", "app_altas")}H · ` +
+  `E2E ${v("e2e", "aprobadas")}/${v("e2e", "fallidas")} fallidas · DAST ${v("dast", "altas")} altas`;
+console.log(`::${conProblema.length ? "error" : "notice"} title=Resumen de seguridad::${linea}`);
+// Si alguna cifra no llegó, se avisa (indica un paso de métricas que no pudo leer su reporte).
+const faltantes = controles.flatMap((c) =>
+  needs[c.job]?.result === "success" ? Object.entries(needs[c.job].outputs ?? {}).filter(([, x]) => x === "?" || x === "").map(([k]) => `${c.job}.${k}`) : []);
+if (faltantes.length) console.log(`::warning title=Cifras sin datos::${faltantes.join(", ")}`);
