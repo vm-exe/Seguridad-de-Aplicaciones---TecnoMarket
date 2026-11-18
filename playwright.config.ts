@@ -14,7 +14,8 @@ export default defineConfig({
   timeout: 60_000,
   // En CI, el reporter "github" publica cada falla como anotación visible en el resumen del run.
   reporter: [
-    ...(process.env.CI ? [["github"] as const] : []),
+    // En CI también JSON: el job "resumen" del pipeline toma de ahí las cifras.
+    ...(process.env.CI ? [["github"] as const, ["json", { outputFile: "e2e-resultados.json" }] as const] : []),
     ["list"],
     ["html", { outputFolder: "playwright-report", open: "never" }],
   ],

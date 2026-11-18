@@ -35,6 +35,13 @@ jobs:
     name: Build, lint, typecheck y pruebas
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # Cifras para el job "resumen" (cada job publica las suyas, aunque falle).
+    outputs:
+      lint: ${{ steps.lint.outcome }}
+      typecheck: ${{ steps.typecheck.outcome }}
+      build: ${{ steps.build.outcome }}
+      pruebas_ok: ${{ steps.metricas.outputs.pruebas_ok }}
+      pruebas_total: ${{ steps.metricas.outputs.pruebas_total }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -44,13 +51,26 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm run lint
-      - run: npx tsc --noEmit
-      - run: npm test --if-present
+      - name: Lint
+        id: lint
+        run: npm run lint
+      - name: Typecheck
+        id: typecheck
+        run: npx tsc --noEmit
+      - name: Pruebas unitarias (Vitest)
+        id: pruebas
+        run: npx vitest run --reporter=default --reporter=json --outputFile=vitest-resultados.json
       - name: Build
+        id: build
         run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
+      - name: Métricas para el resumen
+        id: metricas
+        if: always()
+        run: |
+          echo "pruebas_ok=$(jq -r '.numPassedTests // "?"' vitest-resultados.json 2>/dev/null || echo '?')" >> "$GITHUB_OUTPUT"
+          echo "pruebas_total=$(jq -r '.numTotalTests // "?"' vitest-resultados.json 2>/dev/null || echo '?')" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   sast:
@@ -62,6 +82,10 @@ jobs:
       security-events: write
     container:
       image: semgrep/semgrep:1.140.0
+    outputs:
+      hallazgos: ${{ steps.metricas.outputs.hallazgos }}
+      reglas: ${{ steps.metricas.outputs.reglas }}
+      detalle: ${{ steps.metricas.outputs.detalle }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -84,12 +108,37 @@ jobs:
         with:
           sarif_file: semgrep.sarif
           category: semgrep
+      - name: Métricas para el resumen
+        id: metricas
+        if: always()
+        shell: python3 {0}
+        run: |
+          import json, os
+          salida = open(os.environ["GITHUB_OUTPUT"], "a")
+          try:
+              runs = json.load(open("semgrep.sarif")).get("runs", [])
+              resultados = [r for run in runs for r in run.get("results", [])]
+              reglas = sum(len(run["tool"]["driver"].get("rules", [])) for run in runs)
+              # Hasta 3 hallazgos: regla y archivo:línea (sin el contenido del código).
+              detalle = "; ".join(
+                  f'{r["ruleId"].split(".")[-1]} en {r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]}:{r["locations"][0]["physicalLocation"]["region"]["startLine"]}'
+                  for r in resultados[:3])
+              print(f"hallazgos={len(resultados)}", file=salida)
+              print(f"reglas={reglas}", file=salida)
+              print(f"detalle={detalle}", file=salida)
+          except Exception:
+              print("hallazgos=?", file=salida)
+              print("reglas=?", file=salida)
 
   # ---------------------------------------------------------------------------
   secrets:
     name: Detección de secretos (Gitleaks)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      hallazgos: ${{ steps.metricas.outputs.hallazgos }}
+      commits: ${{ steps.metricas.outputs.commits }}
+      reglas: ${{ steps.metricas.outputs.reglas }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -98,7 +147,18 @@ jobs:
       - name: Gitleaks
         run: |
           docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.28.0@sha256:bf00b5e039f0fad4b32935dc5ec1e358f227ccd097bcb64b971f0331072fe2ae \
-            detect --source /repo --redact --verbose --exit-code 1
+            detect --source /repo --redact --verbose --exit-code 1 \
+            --report-format json --report-path /repo/gitleaks.json 2>&1 | tee gitleaks.log
+      - name: Métricas para el resumen
+        id: metricas
+        if: always()
+        run: |
+          {
+            echo "hallazgos=$(jq 'length' gitleaks.json 2>/dev/null || echo '?')"
+            echo "commits=$(grep -oE '[0-9]+ commits? scanned' gitleaks.log | grep -oE '^[0-9]+' || echo '?')"
+            # Excepciones documentadas en .gitleaks.toml (allowlists justificadas).
+            echo "reglas=$(grep -c '^\[\[allowlists\]\]' .gitleaks.toml || true)"
+          } >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   sca:
@@ -108,6 +168,15 @@ jobs:
     permissions:
       contents: read
       security-events: write
+    outputs:
+      lockfile: ${{ steps.lockfile.outcome }}
+      audit_total: ${{ steps.metricas.outputs.audit_total }}
+      audit_altas: ${{ steps.metricas.outputs.audit_altas }}
+      dependencias: ${{ steps.metricas.outputs.dependencias }}
+      osv: ${{ steps.metricas.outputs.osv }}
+      aceptadas: ${{ steps.metricas.outputs.aceptadas }}
+      vence: ${{ steps.metricas.outputs.vence }}
+      sbom: ${{ steps.metricas.outputs.sbom }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -117,6 +186,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Integridad del lockfile (solo registro npm, solo HTTPS)
+        id: lockfile
         run: npx --yes lockfile-lint@4 --path package-lock.json --type npm --allowed-hosts npm --validate-https
       - run: npm ci --ignore-scripts
       # --omit=optional: better-auth declara vitest como peer OPCIONAL y npm audit lo contaría como
@@ -146,6 +216,20 @@ jobs:
         with:
           name: sbom
           path: sbom.cdx.json
+      - name: Métricas para el resumen
+        id: metricas
+        if: always()
+        run: |
+          npm audit --omit=dev --omit=optional --json > audit.json 2>/dev/null || true
+          {
+            echo "audit_total=$(jq -r '.metadata.vulnerabilities.total // "?"' audit.json 2>/dev/null || echo '?')"
+            echo "audit_altas=$(jq -r '(.metadata.vulnerabilities.high // 0) + (.metadata.vulnerabilities.critical // 0)' audit.json 2>/dev/null || echo '?')"
+            echo "dependencias=$(jq -r '.metadata.dependencies.prod // "?"' audit.json 2>/dev/null || echo '?')"
+            echo "osv=$(jq '[.runs[].results[]?] | length' osv.sarif 2>/dev/null || echo '?')"
+            echo "aceptadas=$(grep -c '^\[\[IgnoredVulns\]\]' osv-scanner.toml || true)"
+            echo "vence=$(grep -m1 -oE 'ignoreUntil = [0-9-]+' osv-scanner.toml | cut -d' ' -f3)"
+            echo "sbom=$(jq '.components | length' sbom.cdx.json 2>/dev/null || echo '?')"
+          } >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   iac:
@@ -155,28 +239,42 @@ jobs:
     permissions:
       contents: read
       security-events: write
+    outputs:
+      aprobados: ${{ steps.metricas.outputs.aprobados }}
+      fallidos: ${{ steps.metricas.outputs.fallidos }}
+      excepciones: ${{ steps.metricas.outputs.excepciones }}
+      desglose: ${{ steps.metricas.outputs.desglose }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      # Imagen oficial fijada por digest (la misma del laboratorio) en lugar de checkov-action:
+      # una sola corrida produce la salida de consola, el SARIF y el JSON con las cifras.
+      # Checkov no tiene framework "docker_compose"; docker-compose.yml lo revisa Trivy config.
       - name: Checkov
-        uses: bridgecrewio/checkov-action@3f0caf0c3aa9f56ade6b49f6e60b63aaeafb75a3 # v12.3141.0
-        with:
-          directory: .
-          # Checkov no tiene framework "docker_compose" (abortaba con "Invalid frameworks").
-          # docker-compose.yml lo revisa Trivy (misconfig) en el laboratorio; ver docs/LABORATORIOS.md.
-          framework: terraform,dockerfile,github_actions,secrets
-          skip_path: node_modules
-          config_file: security/checkov/.checkov.yaml
-          output_format: cli,sarif
-          output_file_path: console,checkov.sarif
-          soft_fail: false
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            bridgecrew/checkov:3.2.495@sha256:4c2c3b67f09867ef2843a03d8ba82adf712eb93ea3584c1708c24ed584f6da17 \
+            -d . --framework terraform,dockerfile,github_actions,secrets \
+            --skip-path node_modules --config-file security/checkov/.checkov.yaml \
+            -o cli -o sarif -o json --output-file-path console,checkov.sarif,checkov.json
       - name: Publicar SARIF
         if: always() && hashFiles('checkov.sarif') != ''
         uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
         with:
           sarif_file: checkov.sarif
           category: checkov
+      - name: Métricas para el resumen
+        id: metricas
+        if: always()
+        run: |
+          r='if type=="array" then .[] else . end | select(.summary != null)'
+          {
+            echo "aprobados=$(jq "[$r | .summary.passed] | add // 0" checkov.json 2>/dev/null || echo '?')"
+            echo "fallidos=$(jq "[$r | .summary.failed] | add // 0" checkov.json 2>/dev/null || echo '?')"
+            echo "excepciones=$(jq "[$r | .summary.skipped] | add // 0" checkov.json 2>/dev/null || echo '?')"
+            echo "desglose=$(jq -r "[$r | \"\(.check_type): \(.summary.passed)\"] | join(\", \")" checkov.json 2>/dev/null || echo '')"
+          } >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   container:
@@ -187,12 +285,20 @@ jobs:
     permissions:
       contents: read
       security-events: write
+    outputs:
+      app_criticas: ${{ steps.metricas.outputs.app_criticas }}
+      app_altas: ${{ steps.metricas.outputs.app_altas }}
+      app_medias: ${{ steps.metricas.outputs.app_medias }}
+      waf_criticas: ${{ steps.metricas.outputs.waf_criticas }}
+      waf_altas: ${{ steps.metricas.outputs.waf_altas }}
+      sbom: ${{ steps.metricas.outputs.sbom }}
+      base: ${{ steps.metricas.outputs.base }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - name: Build imagen
-        run: docker build --target runner -t $IMAGE_NAME:${{ github.sha }} .
+        run: docker build --target runner -t "$IMAGE_NAME:$GITHUB_SHA" .
       # Trivy se ejecuta desde su imagen oficial fijada por digest (la misma de docs/LABORATORIOS.md)
       # en lugar de trivy-action, que descarga el binario en tiempo de ejecución.
       - name: Trivy (SARIF para GitHub Security)
@@ -241,6 +347,29 @@ jobs:
             --scanners vuln,secret "ventas-waf:$GITHUB_SHA"
         env:
           TRIVY_IMAGE: aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
+      - name: Métricas para el resumen
+        id: metricas
+        if: always()
+        run: |
+          contar() { # imagen severidad -> vulnerabilidades con parche disponible
+            jq "[.Results[]?.Vulnerabilities[]? | select(.Severity==\"$2\")] | length" "$1" 2>/dev/null || echo '?'
+          }
+          for img in "$IMAGE_NAME" ventas-waf; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" -v trivy-cache:/root/.cache "$TRIVY_IMAGE" \
+              image --quiet --format json --output "/out/trivy-$img.json" --severity CRITICAL,HIGH,MEDIUM --ignore-unfixed \
+              "$img:$GITHUB_SHA" || true
+          done
+          {
+            echo "app_criticas=$(contar "trivy-$IMAGE_NAME.json" CRITICAL)"
+            echo "app_altas=$(contar "trivy-$IMAGE_NAME.json" HIGH)"
+            echo "app_medias=$(contar "trivy-$IMAGE_NAME.json" MEDIUM)"
+            echo "waf_criticas=$(contar trivy-ventas-waf.json CRITICAL)"
+            echo "waf_altas=$(contar trivy-ventas-waf.json HIGH)"
+            echo "sbom=$(jq '.components | length' sbom-imagen.cdx.json 2>/dev/null || echo '?')"
+            echo "base=$(jq -r '.Metadata.OS | "\(.Family) \(.Name)"' "trivy-$IMAGE_NAME.json" 2>/dev/null || echo '?')"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          TRIVY_IMAGE: aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
 
   # ---------------------------------------------------------------------------
   # Pruebas E2E de seguridad (caja gris) contra la app directa, SIN el WAF:
@@ -249,6 +378,11 @@ jobs:
     name: E2E de seguridad (Playwright)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    outputs:
+      aprobadas: ${{ steps.metricas.outputs.aprobadas }}
+      fallidas: ${{ steps.metricas.outputs.fallidas }}
+      inestables: ${{ steps.metricas.outputs.inestables }}
+      duracion: ${{ steps.metricas.outputs.duracion }}
     needs: [build-test]
     services:
       mysql:
@@ -334,13 +468,23 @@ jobs:
             msg=$(tail -n 40 e2e.log | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-200 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
             echo "::error title=E2E (final del log)::$msg"
           fi
-          exit $rc
+          exit "$rc"
       - name: Log de la app
         if: always()
         run: |
           cat app.log || true
           # Los errores del servidor también como anotaciones (visibles en el resumen del run).
           grep -iE '"level":"(error|fatal)"|error' app.log | head -10 | cut -c1-900 | sed 's/^/::warning title=app.log::/' || true
+      - name: Métricas para el resumen
+        id: metricas
+        if: always()
+        run: |
+          {
+            echo "aprobadas=$(jq '.stats.expected // "?"' e2e-resultados.json 2>/dev/null || echo '?')"
+            echo "fallidas=$(jq '.stats.unexpected // "?"' e2e-resultados.json 2>/dev/null || echo '?')"
+            echo "inestables=$(jq '.stats.flaky // 0' e2e-resultados.json 2>/dev/null || echo 0)"
+            echo "duracion=$(jq '(.stats.duration // 0) / 1000 | floor' e2e-resultados.json 2>/dev/null || echo '?')"
+          } >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -356,6 +500,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [container, sast, sca]
+    outputs:
+      altas: ${{ steps.metricas.outputs.altas }}
+      medias: ${{ steps.metricas.outputs.medias }}
+      bajas: ${{ steps.metricas.outputs.bajas }}
+      informativas: ${{ steps.metricas.outputs.informativas }}
+      bloqueos_waf: ${{ steps.metricas.outputs.bloqueos_waf }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -408,6 +558,19 @@ jobs:
       - name: Logs del WAF (evidencia ModSecurity)
         if: always()
         run: docker compose logs waf > waf.log 2>&1 || true
+      - name: Métricas para el resumen
+        id: metricas
+        if: always()
+        run: |
+          # Tipos de alerta de ZAP por riesgo (riskcode 3=alto, 2=medio, 1=bajo, 0=informativo).
+          riesgo() { jq "[.site[]?.alerts[]? | select(.riskcode==\"$1\")] | length" report_json.json 2>/dev/null || echo '?'; }
+          {
+            echo "altas=$(riesgo 3)"
+            echo "medias=$(riesgo 2)"
+            echo "bajas=$(riesgo 1)"
+            echo "informativas=$(riesgo 0)"
+            echo "bloqueos_waf=$(grep -c 'ModSecurity: Access denied' waf.log 2>/dev/null || true)"
+          } >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -416,3 +579,23 @@ jobs:
       - name: Apagar entorno
         if: always()
         run: docker compose down -v
+
+  # ---------------------------------------------------------------------------
+  # Resumen legible de TODOS los controles (pestaña "Summary" del run). Corre siempre, también
+  # cuando algún control falla, que es cuando más se necesita. No vuelve a analizar nada: solo
+  # junta las cifras que publicó cada job. Unos 10 segundos.
+  resumen:
+    name: Resumen de seguridad
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: always()
+    needs: [build-test, sast, secrets, sca, iac, container, e2e, dast]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Generar resumen
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: node .github/scripts/resumen-seguridad.mjs

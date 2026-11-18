@@ -93,6 +93,7 @@ function generarEnvDocker(docker) {
     MIGRATOR_DB_PASSWORD: migPw,
     DATABASE_URL: `mysql://ventas_app:${appPw}@db:3306/ventas_segura`,
     MIGRATOR_DATABASE_URL: `mysql://ventas_migrator:${migPw}@db:3306/ventas_segura`,
+    MONITOR_TOKEN: randomBytes(24).toString("base64url"),
     BETTER_AUTH_SECRET: b64(),
     FIELD_ENCRYPTION_KEY: b64(),
     HMAC_KEY: b64(),
@@ -176,21 +177,45 @@ async function iniciar() {
 
 /** Levanta (o reutiliza) el contenedor del panel y abre su enlace con token. */
 async function levantarPanel(docker) {
+  const tokenNuevo = asegurarTokenPanel();
   // --build: si el código del panel cambió (p. ej. tras git pull) se reconstruye; si no, usa la caché.
-  await correr(docker, ["compose", "--profile", "monitor", "up", "-d", "--build", "--wait", "docker-proxy", "monitor"]);
-  const patron = /http:\/\/127\.0\.0\.1:\d+\/\?token=[\w-]+/g;
-  let enlace = null;
-  for (let i = 0; i < 20 && !enlace; i++) {
-    const logs = capturar(docker, ["logs", "ventas-monitor"]);
-    enlace = [...`${logs.salida}\n${logs.error}`.matchAll(patron)].pop()?.[0] ?? null;
-    if (!enlace) await esperar(1000);
-  }
-  if (!enlace) fallar("El panel no publicó su enlace.", "Revise los logs del contenedor ventas-monitor en Docker Desktop.");
+  // Si el token se acaba de crear, el contenedor se recrea para que lo lea.
+  await correr(docker, ["compose", "--profile", "monitor", "up", "-d", "--build", "--wait",
+    ...(tokenNuevo ? ["--force-recreate"] : []), "docker-proxy", "monitor"]);
+  const enlace = `http://127.0.0.1:${process.env.MONITOR_PORT ?? 4000}/?token=${leerToken()}`;
+  anotarCredencial("Centro de pruebas", enlace);
   ok("Centro de pruebas en el contenedor ventas-monitor (visible en Docker Desktop)");
-  console.log(`\n  ${color("1", "Abra este enlace")} (personal; cambia cada vez que se reinicia el contenedor):`);
+  console.log(`\n  ${color("1", "Enlace del Centro de pruebas")} (fijo: guárdelo en marcadores):`);
   console.log(`  ${enlace}\n`);
-  info("También está en los logs de ventas-monitor (Docker Desktop → Containers → ventas-monitor).");
+  info("Queda anotado en reportes/credenciales-laboratorio.txt y en los logs de ventas-monitor.");
   if (process.env.MONITOR_SIN_NAVEGADOR !== "1") abrirNavegador(enlace);
+}
+
+const leerToken = () => /^MONITOR_TOKEN=(.+)$/m.exec(readFileSync(ENV_DOCKER, "utf8"))?.[1]?.trim() ?? "";
+
+/** Agrega MONITOR_TOKEN a .env.docker si falta (laboratorios creados antes). true si lo creó. */
+function asegurarTokenPanel() {
+  const actual = leerToken();
+  if (actual.length >= 24 && !actual.startsWith("CAMBIAR")) return false;
+  const nuevo = randomBytes(24).toString("base64url");
+  const contenido = readFileSync(ENV_DOCKER, "utf8");
+  writeFileSync(ENV_DOCKER, /^MONITOR_TOKEN=.*$/m.test(contenido)
+    ? contenido.replace(/^MONITOR_TOKEN=.*$/m, `MONITOR_TOKEN=${nuevo}`)
+    : `${contenido.replace(/\s*$/, "")}\n\n# Token de acceso del Centro de pruebas (lo generó npm run laboratorio)\nMONITOR_TOKEN=${nuevo}\n`, { encoding: "utf8", mode: 0o600 });
+  ok("Token de acceso del Centro de pruebas generado (en .env.docker)");
+  return true;
+}
+
+/** Escribe o actualiza una línea "Clave: valor" en reportes/credenciales-laboratorio.txt. */
+function anotarCredencial(clave, valor) {
+  mkdirSync(path.dirname(CREDENCIALES), { recursive: true });
+  const linea = `${clave}: ${valor}`;
+  let contenido = existsSync(CREDENCIALES)
+    ? readFileSync(CREDENCIALES, "utf8")
+    : "Credenciales del laboratorio LOCAL (archivo ignorado por git; no lo comparta).\n";
+  const patron = new RegExp(`^${clave}:.*$`, "m");
+  contenido = patron.test(contenido) ? contenido.replace(patron, linea) : `${contenido.replace(/\s*$/, "")}\n\n${linea}\n`;
+  writeFileSync(CREDENCIALES, contenido, { encoding: "utf8", mode: 0o600 });
 }
 
 async function soloMonitor() {

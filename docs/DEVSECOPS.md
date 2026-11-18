@@ -37,6 +37,14 @@ Este documento describe cómo **Ventas Online Segura** integra controles de segu
 | DAST | Alerta marcada como `FAIL` en `rules.tsv` |
 | Todos | Tiempo máximo por job (`timeout-minutes`: 15, DAST 30) |
 
+### Resumen de seguridad de cada ejecución
+
+El último job, `resumen`, corre siempre, incluso cuando algún control falla. Escribe en la pestaña **Summary** del run una tabla con el estado y las cifras de los 8 controles: pruebas, hallazgos SAST, secretos, vulnerabilidades SCA y de contenedores por severidad, controles IaC, pruebas E2E y alertas DAST. Incluye también los criterios de bloqueo y los enlaces a la evidencia (SARIF y artefactos).
+
+- **Cómo obtiene las cifras:** cada job las publica como *outputs* en un paso final con `if: always()`.
+- **Seguridad del propio job:** el script `.github/scripts/resumen-seguridad.mjs` las recibe por variable de entorno (`toJSON(needs)`), nunca interpoladas en el código, para evitar inyección en el workflow.
+- **Costo:** unos 10 segundos, porque no vuelve a analizar nada.
+
 ### Cadena de suministro del pipeline
 
 - **Acciones fijadas por SHA**: cada `uses:` apunta a un commit de 40 caracteres con la versión en un comentario (`# v4.4.0`). Un tag se puede mover; un SHA no. Dependabot (`github-actions`) propone los nuevos SHA.

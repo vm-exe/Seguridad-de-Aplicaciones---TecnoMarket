@@ -88,7 +88,7 @@ export function leerEnvDocker() {
 /** Valores secretos de .env.docker que nunca deben aparecer en pantalla ni en el historial. */
 export function secretosConocidos() {
   return Object.entries(leerEnvDocker())
-    .filter(([k, v]) => /PASSWORD|SECRET|KEY|DATABASE_URL/.test(k) && v.length >= 8 && !v.startsWith("CAMBIAR"))
+    .filter(([k, v]) => /PASSWORD|SECRET|KEY|TOKEN|DATABASE_URL/.test(k) && v.length >= 8 && !v.startsWith("CAMBIAR"))
     .map(([, v]) => v);
 }
 

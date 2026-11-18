@@ -16,7 +16,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import os from "node:os";
 import path from "node:path";
 import { CATEGORIAS, PRUEBAS, PRUEBAS_POR_ID } from "./catalogo.mjs";
-import { EN_CONTENEDOR, RAIZ, abrirNavegador, ejecutar, encontrarDocker, ocultarSecretos, secretosConocidos, terminarArbol } from "./comun.mjs";
+import { EN_CONTENEDOR, RAIZ, abrirNavegador, ejecutar, encontrarDocker, leerEnvDocker, ocultarSecretos, secretosConocidos, terminarArbol } from "./comun.mjs";
 
 const PUERTO = Number(process.env.MONITOR_PORT ?? 4000);
 // En el contenedor escucha en todas sus interfaces; docker-compose solo lo publica en 127.0.0.1 del equipo.
@@ -45,7 +45,10 @@ const CABECERAS_BASE = {
 const CSP_PANEL = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const CSP_REPORTE = "sandbox allow-scripts allow-popups; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:";
 
-const token = randomBytes(24).toString("base64url");
+// Token de acceso: el de .env.docker (MONITOR_TOKEN, fijo para poder guardar el enlace en
+// marcadores) o, si no existe, uno aleatorio por arranque.
+const tokenFijo = leerEnvDocker().MONITOR_TOKEN ?? "";
+const token = tokenFijo.length >= 24 && !tokenFijo.startsWith("CAMBIAR") ? tokenFijo : randomBytes(24).toString("base64url");
 const sesiones = new Set();
 const ejecuciones = new Map(); // id -> { id, prueba, lineas[], clientes:Set, estado, ... }
 let enCurso = null;

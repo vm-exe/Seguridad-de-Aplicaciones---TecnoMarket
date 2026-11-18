@@ -66,12 +66,12 @@ Hace seis pasos y se puede repetir sin riesgo: lo que ya existe no se vuelve a c
 | `ventas-monitor` | Centro de pruebas | `127.0.0.1:4000` |
 | `ventas-docker-proxy` | API de Docker restringida, usada solo por el panel | ninguno |
 
-En **Docker Desktop → Containers → ventas-monitor → Logs** se ve en vivo cada prueba que se ejecuta desde el panel, con el nombre de la prueba al inicio de cada línea. Allí también aparece el enlace de acceso con token.
+En **Docker Desktop → Containers → ventas-monitor → Logs** se ve en vivo cada prueba que se ejecuta desde el panel, con el nombre de la prueba al inicio de cada línea. Allí también aparece el enlace de acceso.
 
 | Comando | Para qué |
 |---|---|
 | `npm run laboratorio` | Preparar y encender todo, y abrir el panel |
-| `npm run monitor` | Volver a abrir el panel (muestra el enlace con token) |
+| `npm run monitor` | Volver a abrir el panel (muestra su enlace) |
 | `npm run laboratorio:estado` | Ver los contenedores |
 | `npm run laboratorio:apagar` | Apagar; los datos se conservan |
 | `npm run laboratorio:borrar` | Borrar la base de datos y los secretos locales para empezar de cero (pide escribir BORRAR) |
@@ -87,7 +87,7 @@ En «Ataques contra el WAF», el panel muestra para cada ataque las reglas exact
 
 **Seguridad del propio panel** (también es material para la exposición):
 - **Solo local:** se publica únicamente en `127.0.0.1:4000`, así que otra computadora de la red no puede abrirlo.
-- **Token de acceso:** el enlace lleva un token aleatorio que cambia en cada arranque del contenedor. Se canjea por una cookie `HttpOnly; SameSite=Strict`.
+- **Token de acceso:** el enlace lleva un token aleatorio de 192 bits, propio de cada equipo. Se genera una sola vez (`MONITOR_TOKEN` en `.env.docker`) y queda anotado en `reportes/credenciales-laboratorio.txt`, así que el enlace se puede guardar en marcadores. Se canjea por una cookie `HttpOnly; SameSite=Strict`. Para cambiarlo, borre la línea `MONITOR_TOKEN` y ejecute `npm run monitor`. Si alguien abre el panel sin el token, recibe «Acceso no autorizado».
 - **Validación de origen:** valida la cabecera `Host` (contra *DNS rebinding*), y el `Origin` más una cabecera propia en cada acción (contra CSRF).
 - **Sin comandos libres:** no existe ningún campo para escribir comandos. El navegador solo envía el ID de una prueba del catálogo, y los programas se ejecutan **sin shell**, con argumentos fijos, así que no hay inyección de comandos posible.
 - **Ejecución acotada:** una prueba a la vez, con 10 minutos como máximo y botón para cancelarla.
@@ -254,7 +254,7 @@ docker run --rm -v "${PWD}:/repo:ro" -v "${PWD}/reportes/secretos:/out" zricethe
   dir /repo --config /repo/.gitleaks.toml --no-banner --redact --report-format json --report-path /out/gitleaks.json
 ```
 
-**Resultado esperado:** `leaks found: 9`, todos en `.env.docker` (6) y `.env.local` (3).
+**Resultado esperado:** unos 10 hallazgos (`leaks found`), todos en `.env.docker` y `.env.local` (este último solo si usa la app sin Docker). Incluye el token del Centro de pruebas: Gitleaks también lo reconoce como secreto.
 - **Es correcto:** esos archivos tienen los secretos reales del laboratorio, y por eso están en `.gitignore` y nunca se suben.
 - En el pipeline Gitleaks revisa el **historial de git**, donde esos archivos no existen. Ahí el resultado esperado es 0.
 - Una vez creado el repositorio, se puede probar en local con `gitleaks git /repo` en lugar de `dir`.
@@ -478,6 +478,7 @@ El código está en https://github.com/vm-exe/Seguridad-de-Aplicaciones---TecnoM
 2. Antes de cada *push*, compruebe que `git status` **no** lista `.env.local` ni `.env.docker`.
 3. En GitHub:
    - La pestaña **Actions** ejecuta los jobs `build-test`, `sast`, `secrets`, `sca`, `iac`, `container`, `e2e` y `dast`.
+   - La pestaña **Summary** de cada run muestra el **Resumen de seguridad**: una tabla con los 8 controles, su estado y sus cifras (hallazgos de Semgrep, secretos, vulnerabilidades por severidad, controles de Checkov, pruebas E2E, alertas de ZAP y bloqueos del WAF), más los criterios de bloqueo. Es la mejor captura para el informe.
    - **Security → Code scanning** muestra los resultados SARIF.
    - Los **artefactos** del run incluyen los reportes de ZAP y Playwright y los SBOM.
 4. Demo de bloqueo:
