@@ -142,19 +142,24 @@ Además, la regla `ventas-precio-desde-cliente` no cubría `src/lib/ordenes.ts` 
 **Objetivo:** encontrar dependencias de terceros con CVE conocidas y comprobar que el `package-lock.json` no fue manipulado.
 
 ```powershell
-npm audit --omit=dev
-docker run --rm -v "${PWD}:/src:ro" ghcr.io/google/osv-scanner:v2.2.2 scan source --lockfile /src/package-lock.json
+npm audit --omit=dev --omit=optional --audit-level=high
+docker run --rm -v "${PWD}:/src:ro" ghcr.io/google/osv-scanner:v2.2.2 scan source --config /src/osv-scanner.toml --lockfile /src/package-lock.json
 npx --yes lockfile-lint@4 --path package-lock.json --allowed-hosts npm --validate-https
 ```
 
 **Resultado esperado:**
 - npm audit: `found 0 vulnerabilities`.
-- OSV: `found 607 packages` … `No issues found`.
+- OSV: `No issues found`, con una vulnerabilidad aceptada en `osv-scanner.toml` (ver abajo).
 - lockfile-lint: sin errores.
 
 **Para explicar en la exposición:**
 - Al construir el proyecto, `npm audit` encontró 11 vulnerabilidades, 3 de ellas críticas (`tinypool`, `better-auth`, `esbuild`). Se corrigieron actualizando versiones y con un `override`.
 - `.npmrc` tiene `ignore-scripts=true`, para que ningún paquete ejecute código al instalarse.
+- **Aceptación formal de un riesgo (17/11/2026).** El primer pipeline en GitHub falló porque apareció un aviso nuevo, GHSA-fc5q-39xc-vjpf: un ReDoS en `picomatch` ≤ 4.0.7, todavía sin versión corregida. Solo llega a través de herramientas de prueba (vitest/vite, que better-auth declara como dependencia *opcional*) y no entra en la imagen de producción. Por eso:
+  - `npm audit` usa `--omit=optional`;
+  - la excepción quedó en `osv-scanner.toml` con justificación y fecha de vencimiento (31/01/2027). Al vencer, el gate vuelve a fallar.
+
+  Es un buen ejemplo de que un CVE nuevo puede romper un pipeline sin que cambie el código.
 - Dependabot espera 7 días antes de proponer versiones nuevas (*cooldown*).
 
 **Contraste con el sistema PHP:** PHPMailer estaba copiado a mano y no había forma de saber si tenía CVE.

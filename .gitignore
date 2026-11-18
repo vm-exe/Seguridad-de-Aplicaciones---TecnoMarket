@@ -53,3 +53,8 @@ next-env.d.ts
 *.tfstate.*
 infra/terraform/aws/backend.hcl
 infra/terraform/aws/terraform.tfvars
+
+# Playwright
+/playwright-report/
+/test-results/
+/e2e/.auth/

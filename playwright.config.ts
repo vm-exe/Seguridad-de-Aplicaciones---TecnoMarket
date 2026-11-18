@@ -12,7 +12,12 @@ export default defineConfig({
   workers: 1, // comparten BD y limitadores: secuencial para resultados deterministas
   retries: process.env.CI ? 1 : 0,
   timeout: 60_000,
-  reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
+  // En CI, el reporter "github" publica cada falla como anotación visible en el resumen del run.
+  reporter: [
+    ...(process.env.CI ? [["github"] as const] : []),
+    ["list"],
+    ["html", { outputFolder: "playwright-report", open: "never" }],
+  ],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
     trace: "retain-on-failure",

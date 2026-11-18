@@ -60,7 +60,7 @@ Para las pruebas automáticas, todos usan:
 | `npm run test:cobertura` | Igual, más la cobertura mínima de los módulos de seguridad | Sin líneas `ERROR: Coverage` |
 | `npm run test:e2e` | 17 pruebas de navegador (Playwright); ver el procedimiento en `README.md` | `17 passed` |
 | `npm run typecheck` / `npm run lint` | Tipos y estilo | Sin salida de errores |
-| `npm audit --omit=dev` | Dependencias vulnerables | `found 0 vulnerabilities` |
+| `npm audit --omit=dev --omit=optional` | Dependencias vulnerables | `found 0 vulnerabilities` |
 | `npm run auditoria:verificar` | Integridad de la bitácora | `OK: N eventos íntegros` |
 
 ---
@@ -160,7 +160,7 @@ Se ejecuta en cada *push*, en cada *pull request* y una vez por semana. Si un jo
 **En local (Windows):**
 ```bash
 # SCA
-npm audit --omit=dev
+npm audit --omit=dev --omit=optional --audit-level=high
 npx --yes lockfile-lint@4 --path package-lock.json --allowed-hosts npm --validate-https
 
 # SAST (requiere Python: pip install semgrep)

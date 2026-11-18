@@ -106,7 +106,7 @@ curl "http://localhost:8080/api/health?db=1"   # readiness: también responde la
 | Herramienta | Instalación | Comando |
 |---|---|---|
 | **Semgrep** (SAST) | `pip install semgrep` (o WSL si falla en Windows nativo) | `semgrep scan --config p/owasp-top-ten --config p/typescript --config security/semgrep/ src/` |
-| **npm audit** (SCA) | incluido en npm | `npm audit --omit=dev --audit-level=high` |
+| **npm audit** (SCA) | incluido en npm | `npm audit --omit=dev --omit=optional --audit-level=high` |
 | **OSV-Scanner** (SCA) | binario `osv-scanner_windows_amd64.exe` de GitHub Releases | `osv-scanner scan source --lockfile package-lock.json` |
 | **SBOM** | npx | `npx @cyclonedx/cyclonedx-npm --omit dev --output-file sbom.cdx.json` |
 | **Gitleaks** (secretos) | `winget install gitleaks` o binario de Releases | `gitleaks detect --source . --redact -v` |

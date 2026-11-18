@@ -119,8 +119,10 @@ jobs:
       - name: Integridad del lockfile (solo registro npm, solo HTTPS)
         run: npx --yes lockfile-lint@4 --path package-lock.json --type npm --allowed-hosts npm --validate-https
       - run: npm ci --ignore-scripts
+      # --omit=optional: better-auth declara vitest como peer OPCIONAL y npm audit lo contaría como
+      # producción. Las dependencias opcionales/de desarrollo las sigue cubriendo OSV-Scanner (lockfile completo).
       - name: npm audit (dependencias de producción, falla en HIGH/CRITICAL)
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --omit=dev --omit=optional --audit-level=high
       - name: OSV-Scanner (base OSV.dev / GHSA)
         id: osv
         run: |
@@ -147,7 +149,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   iac:
-    name: IaC (Checkov - Terraform, Dockerfile, Compose)
+    name: IaC (Checkov - Terraform, Dockerfile, GitHub Actions)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -161,14 +163,16 @@ jobs:
         uses: bridgecrewio/checkov-action@3f0caf0c3aa9f56ade6b49f6e60b63aaeafb75a3 # v12.3141.0
         with:
           directory: .
-          framework: terraform,dockerfile,docker_compose,github_actions,secrets
+          # Checkov no tiene framework "docker_compose" (abortaba con "Invalid frameworks").
+          # docker-compose.yml lo revisa Trivy (misconfig) en el laboratorio; ver docs/LABORATORIOS.md.
+          framework: terraform,dockerfile,github_actions,secrets
           skip_path: node_modules
           config_file: security/checkov/.checkov.yaml
           output_format: cli,sarif
           output_file_path: console,checkov.sarif
           soft_fail: false
       - name: Publicar SARIF
-        if: always()
+        if: always() && hashFiles('checkov.sarif') != ''
         uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
         with:
           sarif_file: checkov.sarif
@@ -189,40 +193,43 @@ jobs:
           persist-credentials: false
       - name: Build imagen
         run: docker build --target runner -t $IMAGE_NAME:${{ github.sha }} .
+      # Trivy se ejecuta desde su imagen oficial fijada por digest (la misma de docs/LABORATORIOS.md)
+      # en lugar de trivy-action, que descarga el binario en tiempo de ejecución.
       - name: Trivy (SARIF para GitHub Security)
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          format: sarif
-          output: trivy.sarif
-          severity: CRITICAL,HIGH,MEDIUM
-          ignore-unfixed: true
+        run: |
+          trivy() {
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" \
+              -v trivy-cache:/root/.cache "$TRIVY_IMAGE" "$@"
+          }
+          trivy image --quiet --format sarif --output /out/trivy.sarif \
+            --severity CRITICAL,HIGH,MEDIUM --ignore-unfixed "$IMAGE_NAME:$GITHUB_SHA"
+        env:
+          TRIVY_IMAGE: aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
       - name: Publicar SARIF
-        if: always()
+        if: always() && hashFiles('trivy.sarif') != ''
         uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
         with:
           sarif_file: trivy.sarif
           category: trivy
       - name: SBOM de la imagen (CycloneDX, incluye paquetes del SO base)
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          format: cyclonedx
-          output: sbom-imagen.cdx.json
-          scan-type: image
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" \
+            -v trivy-cache:/root/.cache "$TRIVY_IMAGE" \
+            image --quiet --format cyclonedx --output /out/sbom-imagen.cdx.json "$IMAGE_NAME:$GITHUB_SHA"
+        env:
+          TRIVY_IMAGE: aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom-imagen
           path: sbom-imagen.cdx.json
       - name: Trivy gate (falla en CRITICAL/HIGH con parche disponible)
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          format: table
-          exit-code: "1"
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          scanners: vuln,secret,misconfig
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v trivy-cache:/root/.cache "$TRIVY_IMAGE" \
+            image --quiet --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed \
+            --scanners vuln,secret,misconfig "$IMAGE_NAME:$GITHUB_SHA"
+        env:
+          TRIVY_IMAGE: aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
 
   # ---------------------------------------------------------------------------
   # Pruebas E2E de seguridad (caja gris) contra la app directa, SIN el WAF:
@@ -310,7 +317,10 @@ jobs:
         run: npm run test:e2e
       - name: Log de la app
         if: always()
-        run: cat app.log || true
+        run: |
+          cat app.log || true
+          # Los errores del servidor también como anotaciones (visibles en el resumen del run).
+          grep -iE '"level":"(error|fatal)"|error' app.log | head -10 | cut -c1-900 | sed 's/^/::warning title=app.log::/' || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

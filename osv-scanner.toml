@@ -1,7 +1,12 @@
 # Excepciones documentadas para OSV-Scanner (gate del job "sca").
 # Cada excepción debe tener: ID, fecha de expiración y justificación (aceptación formal del riesgo).
-# Ejemplo:
-# [[IgnoredVulns]]
-# id = "GHSA-xxxx-xxxx-xxxx"
-# ignoreUntil = 2027-01-31
-# reason = "Dependencia solo de desarrollo (drizzle-kit); no llega a la imagen de producción."
+# Al vencer ignoreUntil, el gate vuelve a fallar y obliga a revisar de nuevo la excepción.
+
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2027-01-31
+reason = """picomatch <= 4.0.7: ReDoS con extglobs repetidos; aún no existe versión parcheada.
+Solo llega por vitest/vite/tinyglobby (pruebas unitarias; better-auth declara vitest como peer OPCIONAL)
+y por eslint (fast-glob). Ninguno se incluye en la imagen de producción (Next standalone) y los patrones
+glob que procesan vienen de la configuración del repositorio, no de usuarios. Riesgo aceptado hasta que
+se publique el parche; Dependabot propondrá la actualización."""
