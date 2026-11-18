@@ -20,3 +20,8 @@ RUN set -eux; \
     sed -i '1i load_module modules/ngx_otel_module.so;' /etc/nginx/templates/nginx.conf.template
 
 USER nginx
+
+# El healthcheck de la imagen base consulta https://localhost:8443; este WAF escucha HTTP en 8080
+# (en la nube el TLS termina en el balanceador). Se reemplaza en la imagen, no solo en compose.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fs -A healthcheck http://localhost:8080/healthz || exit 1
