@@ -1,0 +1,74 @@
+# =============================================================================
+# OpenTelemetry Collector: recibe las trazas del WAF (gRPC) y de la app (HTTP),
+# las SANEA y las envía a Jaeger.
+#
+#   ventas-waf ──gRPC 4317──┐
+#                           ├──> [collector: saneo + agrupación] ──> jaeger
+#   ventas-app ──HTTP 4318──┘
+#
+# Seguridad: la telemetría también es un canal de fuga de datos. Antes de guardar:
+#   1) se ocultan los valores de parámetros sensibles en las URL (token, code, password…),
+#      pero se conservan los demás: el payload de un ataque (?q=' OR 1=1) sigue visible;
+#   2) se eliminan cabeceras con credenciales si alguna instrumentación las registra;
+#   3) las consultas SQL llegan parametrizadas (con ?), nunca con los valores.
+# =============================================================================
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 200
+    spike_limit_mib: 50
+
+  transform/saneo:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          # Valores de parámetros sensibles en cualquier atributo de URL.
+          - replace_pattern(attributes["http.target"], "(?i)((?:token|code|password|secret|otp|key)=)[^&#]*", "$${1}[redactado]")
+          - replace_pattern(attributes["http.url"], "(?i)((?:token|code|password|secret|otp|key)=)[^&#]*", "$${1}[redactado]")
+          - replace_pattern(attributes["url.full"], "(?i)((?:token|code|password|secret|otp|key)=)[^&#]*", "$${1}[redactado]")
+          - replace_pattern(attributes["url.query"], "(?i)((?:token|code|password|secret|otp|key)=)[^&#]*", "$${1}[redactado]")
+          - replace_pattern(attributes["next.route"], "(?i)((?:token|code|password|secret|otp|key)=)[^&#]*", "$${1}[redactado]")
+          - replace_pattern(name, "(?i)((?:token|code|password|secret|otp|key)=)[^&#]*", "$${1}[redactado]")
+          # Cabeceras con credenciales o sesión, si alguna instrumentación las registra.
+          - delete_matching_keys(attributes, "(?i)^http\\.request\\.header\\.(cookie|authorization|set-cookie)")
+          - delete_matching_keys(attributes, "(?i)^http\\.response\\.header\\.set-cookie")
+          # Las consultas de mysql2 se muestran como un servicio propio ("ventas-db (MySQL)")
+          # para que el diagrama de Jaeger dibuje el salto app → base de datos.
+          - set(attributes["service.name"], "ventas-db (MySQL)") where attributes["db.system"] == "mysql" or attributes["db.system.name"] == "mysql"
+
+  # Mueve el atributo service.name de esos spans al nivel de recurso (nuevo "servicio").
+  groupbyattrs/servicio-db:
+    keys: [service.name]
+
+  batch:
+    timeout: 2s
+
+exporters:
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true # red interna de observabilidad, sin salida a Internet
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/saneo, groupbyattrs/servicio-db, batch]
+      exporters: [otlp_grpc/jaeger]

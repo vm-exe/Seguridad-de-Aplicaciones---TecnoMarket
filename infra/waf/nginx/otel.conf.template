@@ -1,0 +1,33 @@
+# =============================================================================
+# Trazas OpenTelemetry del WAF (módulo oficial ngx_otel_module, contexto http).
+# Cada solicitud genera un span "ventas-waf". Si ModSecurity la bloquea, la traza
+# TERMINA aquí (403); si pasa, la app continúa la misma traza (cabecera traceparent).
+# =============================================================================
+otel_exporter {
+    endpoint ${OTEL_COLLECTOR_GRPC};
+}
+otel_service_name ventas-waf;
+
+# Se traza todo excepto el healthcheck interno (cada 15 s), que solo agregaría ruido.
+map $uri $otel_trazar {
+    /healthz off;
+    default  on;
+}
+otel_trace $otel_trazar;
+
+# "inject" (no "propagate"): el WAF NO confía en un traceparent enviado por el cliente.
+# Siempre inicia una traza nueva y la inyecta hacia la app, así un atacante no puede
+# colgar sus solicitudes de trazas ajenas ni falsificar el muestreo.
+otel_trace_context inject;
+
+otel_span_name "WAF $request_method $uri";
+
+# Resultado de la inspección, legible en Jaeger (atributo waf.resultado).
+map $status $waf_resultado {
+    403     "bloqueado por ModSecurity";
+    429     "limitado por rate limit";
+    400     "solicitud rechazada";
+    default "permitido";
+}
+otel_span_attr waf.resultado $waf_resultado;
+otel_span_attr waf.paranoia_level ${BLOCKING_PARANOIA};

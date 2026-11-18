@@ -383,6 +383,7 @@ npm run auditoria:verificar
 | `src/proxy.ts` | CSP con *nonce* distinto en cada petición | XSS |
 | `infra/waf/` | Nginx + ModSecurity OWASP CRS (nivel de paranoia 2) y límites de tasa en las rutas de login | Inyección, escaneos y fuerza bruta en el perímetro |
 | `src/lib/logger.ts` + `audit.ts` | Logs JSON hacia CloudWatch y el SIEM, con datos sensibles ocultos | Detección y respuesta |
+| `src/instrumentation.ts` + `infra/observabilidad/` + `infra/waf/nginx/otel.conf.template` | Trazas OpenTelemetry WAF → app → MySQL, visibles en Jaeger; el Collector oculta tokens y cookies | Ver por dónde entró un ataque y dónde se detuvo |
 
 ### 7.3 Cómo probarlo
 
@@ -420,6 +421,10 @@ curl "http://localhost:8080/tienda?q=1'%20UNION%20SELECT%20password%20FROM%20use
 docker compose logs waf | grep -i "ModSecurity"                                       # evidencia del bloqueo
 ```
 
+**Monitoreo en vivo (Jaeger).** Con el laboratorio encendido, abra http://localhost:16686. Paso a paso en `docs/LABORATORIOS.md`, laboratorio 12:
+- **System Architecture → DAG:** diagrama `ventas-waf → ventas-app → ventas-db (MySQL)`.
+- **Search** → servicio `ventas-waf`, Tags `http.status_code=403`: solo los ataques. Cada uno es una traza de un único span que termina en el WAF, con el *payload* en `http.target`.
+
 **SIEM.** Ver `docs/DEVSECOPS.md` §4:
 - Los logs de la app son JSON. Por ejemplo, un login fallido se registra con `"type":"audit","event":"auth.login.failed","ip":…,"email_hash":…`.
 - En AWS, CloudWatch tiene alarmas para fuerza bruta (`auth.login.failed`), accesos denegados (`authz.denied`) y montos manipulados (`payment.amount_mismatch`), y consultas de Logs Insights listas para usar.
@@ -429,7 +434,8 @@ docker compose logs waf | grep -i "ModSecurity"                                 
 2. Caja negra: reporte de ZAP antes (sistema PHP: sin cabeceras, cookies sin flags) y después (nuevo sistema).
 3. Caja gris en vivo con Burp: IDOR → 404; un SQLi a través del WAF → 403 de ModSecurity.
 4. Caso de abuso de negocio: las dos pestañas aprobando el mismo pago, con el stock descontado una sola vez (`compra.spec.ts`).
-5. Monitoreo: el evento llega como JSON, la consulta del SIEM detecta la fuerza bruta y el runbook dice qué hacer.
+5. Monitoreo en vivo: en Jaeger, el diagrama de servicios y, lado a lado, una compra legítima (WAF → app → consultas SQL) frente a un SQLi que termina en el WAF.
+6. Detección: el evento llega como JSON, la consulta del SIEM detecta la fuerza bruta y el runbook dice qué hacer.
 
 ### 7.5 Preguntas probables
 - **¿Hay RASP?** No hay un producto RASP comercial. Su función se cubre con controles dentro de la aplicación:

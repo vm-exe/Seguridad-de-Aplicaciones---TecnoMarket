@@ -25,6 +25,7 @@ Los comandos están escritos para **PowerShell** y se ejecutan desde la carpeta 
 | 9 | Pruebas funcionales de seguridad | Vitest, Playwright | 3 y 4 | Integrante 4 |
 | 10 | Auditoría y SIEM | Bitácora encadenada, logs JSON | 6 | Integrante 4 |
 | 11 | Pipeline CI/CD en GitHub | GitHub Actions | 3 y 5 | Integrante 1 |
+| 12 | Monitoreo: recorrido de solicitudes y ataques | OpenTelemetry, Jaeger | 6 | Integrante 5 |
 
 ---
 
@@ -45,11 +46,11 @@ docker compose --profile migrate --profile tareas build      # 3-5 min la primer
 docker compose up -d db
 docker compose --profile migrate run --rm migrate             # crea las tablas (usuario DDL)
 docker compose --profile tareas run --rm tareas npx tsx --conditions=react-server scripts/seed.ts
-docker compose up -d app waf
-docker compose ps                                             # los 3 deben decir (healthy)
+docker compose up -d app waf                                  # también inicia otel-collector y jaeger
+docker compose ps                                             # db, app y waf deben decir (healthy)
 ```
 
-Abra **http://localhost:8080**. Esa es la única entrada: la app y la base de datos no publican puertos.
+Abra **http://localhost:8080**. Esa es la única entrada a la tienda: la app y la base de datos no publican puertos. El monitoreo (Jaeger) queda en **http://localhost:16686**, accesible solo desde su propio equipo (laboratorio 12).
 
 Crear un administrador (opcional, para los laboratorios de admin):
 ```powershell
@@ -387,17 +388,15 @@ Las consultas de detección del SIEM (fuerza bruta, acciones de admin fuera de h
 
 ---
 
-## 11. Pipeline CI/CD en GitHub (pendiente de crear el repositorio)
+## 11. Pipeline CI/CD en GitHub
 
-1. Crear un repositorio **vacío** en GitHub (por ejemplo `ventas-online-segura`).
-2. Desde esta carpeta:
+El código está en https://github.com/vm-exe/Seguridad-de-Aplicaciones---TecnoMarket, rama `proyecto`. Cada *push* o *pull request* a `proyecto` o `main` ejecuta el pipeline.
+
+1. Clonar la rama:
    ```powershell
-   git init; git add .; git commit -m "Migración segura del sistema de ventas"
-   git branch -M main
-   git remote add origin https://github.com/<usuario>/ventas-online-segura.git
-   git push -u origin main
+   git clone -b proyecto https://github.com/vm-exe/Seguridad-de-Aplicaciones---TecnoMarket.git
    ```
-   Antes del primer *push*, compruebe que `git status` **no** lista `.env.local` ni `.env.docker`.
+2. Antes de cada *push*, compruebe que `git status` **no** lista `.env.local` ni `.env.docker`.
 3. En GitHub:
    - La pestaña **Actions** ejecuta los jobs `build-test`, `sast`, `secrets`, `sca`, `iac`, `container`, `e2e` y `dast`.
    - **Security → Code scanning** muestra los resultados SARIF.
@@ -406,6 +405,80 @@ Las consultas de detección del SIEM (fuerza bruta, acciones de admin fuera de h
    - Crear la rama `demo-sast`.
    - Copiar el archivo de 1.2 dentro de `src/app/`.
    - Hacer *push* y abrir un *pull request*: el job `sast` queda en rojo.
+
+**Lo que pasó en el primer pipeline real (17/11/2026), útil para la exposición.** De 7 jobs, 4 fallaron la primera vez y cada falla enseña algo distinto:
+
+| Job | Causa | Lección |
+|---|---|---|
+| SCA | Un CVE nuevo en `picomatch`, sin parche, publicado después de escribir el código | Un pipeline puede romperse sin cambiar el código; se resolvió con aceptación formal del riesgo y fecha de vencimiento (laboratorio 2) |
+| IaC | `docker_compose` no es un framework válido de Checkov | La configuración de las herramientas también se prueba |
+| Trivy | La acción `trivy-action` falló al instalar el binario | Se reemplazó por la imagen oficial fijada por digest: menos piezas que pueden fallar o ser comprometidas |
+| E2E | Faltaba el script `test:e2e`; localmente se usaba `npx playwright test` | Lo que funciona «en mi máquina» se prueba en un entorno limpio |
+| DAST | La acción de ZAP fallaba por las 6 advertencias ya aceptadas | Distinguir *FAIL* de *WARN* aceptado (`-I`) |
+
+---
+
+## 12. Monitoreo: recorrido de solicitudes y ataques (OpenTelemetry + Jaeger)
+
+**Objetivo (Fase 6):** ver en vivo cómo viaja cada solicitud por la arquitectura y dónde se detiene un ataque. Es la parte de monitoreo y detección de la Fase 6, que antes solo existía como diseño (CloudWatch en Terraform).
+
+```
+navegador ──> ventas-waf ──traceparent──> ventas-app ──> ventas-db (MySQL)
+                  │                            │               │
+                  └──────── spans (OTLP) ──────┴───────────────┘
+                                   │
+                            otel-collector  (oculta tokens y cookies)
+                                   │
+                                 Jaeger  ──>  http://localhost:16686
+```
+
+**Cómo funciona:**
+- **WAF** (`infra/waf/Dockerfile`, `infra/waf/nginx/otel.conf.template`): el módulo oficial de nginx `ngx_otel_module` crea un span por solicitud con el atributo `waf.resultado` (`permitido`, `bloqueado por ModSecurity`, `limitado por rate limit`). Inyecta la cabecera `traceparent` hacia la app.
+- **App** (`src/instrumentation.ts`): continúa la misma traza y registra cada consulta SQL con `mysql2`. Solo se activa si existe `OTEL_EXPORTER_OTLP_ENDPOINT`, así que en desarrollo y en las pruebas no se carga.
+- **Collector** (`infra/observabilidad/otel-collector.yaml`): sanea los datos antes de guardarlos y presenta las consultas SQL como un servicio aparte, `ventas-db (MySQL)`, para que aparezca en el diagrama.
+
+**Pasos:**
+1. Con el laboratorio encendido (sección 0), abra **http://localhost:16686**.
+2. Genere tráfico normal: navegue por la tienda en http://localhost:8080 o ejecute:
+   ```powershell
+   foreach ($u in "/", "/tienda", "/tienda?q=silla", "/login") { (Invoke-WebRequest "http://localhost:8080$u" -UseBasicParsing).StatusCode }
+   ```
+3. Lance ataques (deben responder **403**):
+   ```powershell
+   curl.exe -s -o NUL -w "%{http_code}`n" "http://localhost:8080/tienda?q=%27%20OR%201%3D1--"
+   curl.exe -s -o NUL -w "%{http_code}`n" "http://localhost:8080/tienda?q=%3Cscript%3Ealert(1)%3C/script%3E"
+   curl.exe -s -o NUL -w "%{http_code}`n" -A "sqlmap/1.8" "http://localhost:8080/"
+   ```
+4. **Diagrama de servicios:** menú superior → **System Architecture** → pestaña **DAG**. Se ve `ventas-waf → ventas-app → ventas-db (MySQL)` con el número de llamadas en cada flecha.
+5. **Recorrido de una solicitud:** **Search** → Service `ventas-waf` → **Find Traces**.
+   - Una solicitud **legítima** muestra tres servicios: el WAF, la renderización en la app y cada consulta SQL con su duración.
+   - Un **ataque bloqueado** tiene un solo span: la traza **termina en el WAF**. Al abrirlo se ven `http.target` con el *payload* (`/tienda?q=' OR 1=1--`), `http.user_agent` (`sqlmap/1.8`) y `waf.resultado = bloqueado por ModSecurity`.
+   - Para filtrar solo ataques, en **Tags** escriba `http.status_code=403`.
+6. **Trace Graph:** dentro de una traza, el selector de vista de la esquina superior derecha cambia de línea de tiempo a diagrama.
+
+**Resultado esperado:**
+
+| Prueba | Resultado |
+|---|---|
+| Diagrama (DAG) | `ventas-waf → ventas-app → ventas-db (MySQL)` |
+| Solicitud legítima | Traza con los 3 servicios |
+| SQLi, XSS y sqlmap | Traza de un solo span en `ventas-waf`, 403, `bloqueado por ModSecurity` |
+| `GET /api/auth/verify-email?token=SECRETO` | En Jaeger aparece `token=[redactado]` |
+| Consultas SQL | Con `?` en lugar de valores: nunca se registran datos de clientes |
+| `traceparent` falso enviado por el cliente | Ignorado: el WAF siempre inicia una traza nueva |
+
+**Para explicar en la exposición (controles de seguridad del propio monitoreo):**
+- **La telemetría también puede filtrar datos.** El Collector oculta los valores de `token`, `code`, `password`, `secret`, `otp` y `key` en las URL y borra las cabeceras `Cookie` y `Authorization`. Se conservan los demás parámetros, por eso el *payload* del ataque sigue siendo visible para el analista.
+- **No se confía en el cliente.** El WAF usa `otel_trace_context inject`, no `propagate`: descarta cualquier `traceparent` recibido. Así un atacante no puede mezclar sus solicitudes con trazas ajenas ni forzar el muestreo.
+- **Mínima exposición.** Jaeger solo escucha en `127.0.0.1:16686`. El Collector y Jaeger viven en la red interna `observabilidad`, sin salida a Internet. Los contenedores son de solo lectura, sin capacidades y sin root.
+- **Equivalente en la nube.** El mismo Collector puede enviar a AWS X-Ray o CloudWatch cambiando solo el exportador. El código de la app no cambia.
+
+**Notas:**
+- En los spans de 403, Jaeger puede mostrar el aviso *Negative duration detected*. ModSecurity corta la solicitud antes de que el módulo OTel cierre el span; es cosmético, de menos de un milisegundo.
+- Jaeger guarda las trazas en memoria: se pierden al reiniciar el contenedor. Para la demo, genere el tráfico justo antes.
+- El healthcheck interno del WAF (`/healthz`) no se traza, para no llenar la vista de ruido.
+
+**Evidencia para el informe:** captura del DAG, de una traza legítima con sus consultas SQL y de un ataque bloqueado con sus atributos.
 
 ---
 
@@ -424,3 +497,5 @@ Las consultas de detección del SIEM (fuerza bruta, acciones de admin fuera de h
 - [ ] Burp: capturas de IDOR, CSRF y la condición de carrera
 - [ ] Bitácora: verificación íntegra y detección de manipulación
 - [ ] GitHub Actions: pipeline en verde y PR `demo-sast` en rojo
+- [ ] Jaeger: diagrama `ventas-waf → ventas-app → ventas-db`, una traza legítima y un ataque bloqueado
+- [ ] Jaeger: token `[redactado]` en la URL de verificación de correo

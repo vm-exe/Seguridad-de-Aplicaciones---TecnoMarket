@@ -230,6 +230,17 @@ jobs:
             --scanners vuln,secret,misconfig "$IMAGE_NAME:$GITHUB_SHA"
         env:
           TRIVY_IMAGE: aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
+      # El WAF también es una imagen propia (CRS + módulo OpenTelemetry de nginx.org): mismo gate.
+      - name: Build imagen del WAF
+        run: docker build -t ventas-waf:${{ github.sha }} infra/waf
+      - name: Trivy gate del WAF (CRITICAL/HIGH con parche disponible)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v trivy-cache:/root/.cache "$TRIVY_IMAGE" \
+            image --quiet --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed \
+            --scanners vuln,secret "ventas-waf:$GITHUB_SHA"
+        env:
+          TRIVY_IMAGE: aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
 
   # ---------------------------------------------------------------------------
   # Pruebas E2E de seguridad (caja gris) contra la app directa, SIN el WAF:

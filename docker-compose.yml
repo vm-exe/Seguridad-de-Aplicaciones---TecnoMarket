@@ -11,8 +11,10 @@ name: ventas-online-segura
 
 services:
   waf:
-    # Fijar por digest en producción: owasp/modsecurity-crs@sha256:...
-    image: owasp/modsecurity-crs:4.25-nginx-alpine-lts
+    # Imagen OWASP CRS + módulo OpenTelemetry de nginx (infra/waf/Dockerfile).
+    build:
+      context: infra/waf
+    image: ventas-waf:local
     container_name: ventas-waf
     restart: unless-stopped
     ports:
@@ -37,14 +39,18 @@ services:
       COMBINED_FILE_SIZES: "10485760"
       NGINX_ALWAYS_TLS_REDIRECT: "off" # en local sin TLS; en cloud TLS termina en el ALB
       SET_REAL_IP_FROM: 0.0.0.0/0
+      OTEL_COLLECTOR_GRPC: otel-collector:4317
     volumes:
       - ./infra/waf/nginx/default.conf.template:/etc/nginx/templates/conf.d/default.conf.template:ro
       - ./infra/waf/nginx/limits.conf.template:/etc/nginx/templates/conf.d/limits.conf.template:ro
+      - ./infra/waf/nginx/otel.conf.template:/etc/nginx/templates/conf.d/otel.conf.template:ro
       - ./infra/waf/modsecurity/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:ro
       - ./infra/waf/modsecurity/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf:ro
     depends_on:
       app:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     # El healthcheck de la imagen consulta https://localhost:8443; aquí el WAF solo
     # escucha HTTP en 8080 (en la nube el TLS termina en el balanceador).
     healthcheck:
@@ -53,7 +59,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    networks: [frontend]
+    networks: [frontend, observabilidad]
     security_opt: ["no-new-privileges:true"]
 
   app:
@@ -70,6 +76,10 @@ services:
       HOSTNAME: 0.0.0.0
       UPLOAD_DIR: /data/uploads
       TRUST_PROXY: "true"
+      # Trazas OpenTelemetry (src/instrumentation.ts) hacia el Collector.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_SERVICE_NAME: ventas-app
     read_only: true
     tmpfs:
       - /tmp:size=64m,noexec,nosuid
@@ -92,7 +102,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    networks: [frontend, backend]
+    networks: [frontend, backend, observabilidad]
     # Sin "ports": la app NO es accesible directamente, sólo a través del WAF.
 
   migrate:
@@ -159,12 +169,50 @@ services:
     networks: [backend]
     # Sin "ports": la base de datos no se expone al host.
 
+  # ---------------------------------------------------------------------------
+  # Observabilidad (OpenTelemetry): WAF y app -> Collector (saneo) -> Jaeger.
+  # Interfaz: http://localhost:16686 (solo en 127.0.0.1, nunca expuesta a la red).
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+    container_name: ventas-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./infra/observabilidad/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    depends_on: [jaeger]
+    networks: [observabilidad]
+
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0@sha256:836b967b5abcf1f7758066aa6b348619267a2f1459f72d472840570f9bd88a17
+    container_name: ventas-jaeger
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16686:16686" # interfaz web, solo desde este equipo
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    networks: [observabilidad, monitoreo]
+
 networks:
   frontend:
     driver: bridge
   backend:
     driver: bridge
     internal: true
+  # Telemetría: interna, sin salida a Internet.
+  observabilidad:
+    driver: bridge
+    internal: true
+  # Solo para publicar la interfaz de Jaeger en 127.0.0.1 (una red interna no publica puertos).
+  monitoreo:
+    driver: bridge
 
 volumes:
   uploads:

@@ -15,6 +15,7 @@ El análisis de los hallazgos del sistema anterior y su correspondencia con cada
 | Pagos | PayPal Orders v2 por flujo de redirección, servidor a servidor (o modo `simulado` para laboratorio) |
 | Infraestructura | Docker, Nginx + ModSecurity OWASP CRS, Terraform AWS (ALB + WAFv2, ECS Fargate, RDS con KMS, Secrets Manager, S3, CloudWatch) |
 | CI/CD | GitHub Actions: Semgrep, Gitleaks, npm audit/OSV, SBOM, Checkov, Trivy y OWASP ZAP |
+| Observabilidad | OpenTelemetry (WAF con `ngx_otel_module` y app con `@vercel/otel` + mysql2) → OTel Collector (saneo) → Jaeger |
 
 ## Controles principales
 
@@ -78,6 +79,8 @@ docker compose --profile tareas run --rm tareas npx tsx --conditions=react-serve
 docker compose --profile tareas run --rm -e ADMIN_PASSWORD="<frase-larga>" tareas   npx tsx --conditions=react-server scripts/crear-admin.ts admin@ejemplo.com "Nombre"
 docker compose up -d app waf            # http://localhost:8080
 ```
+
+El mismo `up` inicia el monitoreo. En **http://localhost:16686** (Jaeger, solo accesible desde el propio equipo) se ve el diagrama `ventas-waf → ventas-app → ventas-db (MySQL)` y el recorrido de cada solicitud: un ataque bloqueado termina en el WAF. Ver `docs/LABORATORIOS.md`, laboratorio 12.
 
 En el laboratorio, los correos (activación y recuperación) se guardan en `reportes/correos/`. Para apagarlo todo: `docker compose down`; para borrar también los datos: `docker compose down -v`.
 
