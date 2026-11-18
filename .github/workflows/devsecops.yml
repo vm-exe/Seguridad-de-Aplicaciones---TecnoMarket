@@ -314,7 +314,16 @@ jobs:
           E2E_BASE_URL: http://localhost:3000
           E2E_MAILBOX_DIR: ./reportes/correos
           E2E_CREAR_ADMIN: "1"
-        run: npm run test:e2e
+        run: |
+          set +e
+          npm run test:e2e 2>&1 | tee e2e.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != "0" ]; then
+            # Resumen de la falla como anotación (visible sin abrir el log completo).
+            msg=$(tail -n 40 e2e.log | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-200 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+            echo "::error title=E2E (final del log)::$msg"
+          fi
+          exit $rc
       - name: Log de la app
         if: always()
         run: |
@@ -379,7 +388,9 @@ jobs:
         with:
           target: http://localhost:8080
           rules_file_name: security/zap/rules.tsv
-          cmd_options: "-a -j"
+          # -I: las WARN aceptadas (justificadas en docs/EVIDENCIA_LABORATORIO.md §5) no rompen el
+          # pipeline; solo falla ante una regla marcada FAIL en security/zap/rules.tsv.
+          cmd_options: "-a -j -I"
           allow_issue_writing: false
           fail_action: true
           artifact_name: zap-baseline-report

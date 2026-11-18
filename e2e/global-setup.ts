@@ -15,7 +15,7 @@ export default function globalSetup() {
   const password = `Adm-${randomBytes(12).toString("base64url")}9`;
   execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "admin:crear", "--", email, "Admin E2E"], {
     env: { ...process.env, ADMIN_PASSWORD: password },
-    stdio: "ignore",
+    stdio: ["ignore", "inherit", "inherit"], // si falla, su error queda en el log (la contraseña no se imprime)
     shell: process.platform === "win32",
   });
   mkdirSync(path.dirname(ADMIN_FILE), { recursive: true });
