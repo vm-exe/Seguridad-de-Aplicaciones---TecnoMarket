@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Centro de pruebas de seguridad</title>
+  <link rel="stylesheet" href="/estilos.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="cabecera">
+    <div class="titulo">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m8.5 12 2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+      <div>
+        <h1>Centro de pruebas de seguridad</h1>
+        <p>Ventas Online Segura · laboratorio local</p>
+      </div>
+    </div>
+    <div class="estado-lab">
+      <div id="servicios" class="servicios" aria-live="polite"><span class="chip">Consultando laboratorio…</span></div>
+      <nav class="enlaces">
+        <a href="http://localhost:8080" target="_blank" rel="noopener noreferrer">Tienda</a>
+        <a href="http://localhost:16686" target="_blank" rel="noopener noreferrer">Jaeger</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="principal">
+    <section class="catalogo" aria-label="Pruebas disponibles">
+      <div id="resumen" class="resumen"></div>
+      <div id="categorias"></div>
+    </section>
+
+    <section class="consola" aria-label="Ejecución en vivo">
+      <div class="consola-cabecera">
+        <div>
+          <div class="consola-etiqueta">Ejecución en vivo</div>
+          <h2 id="consola-titulo">Elija una prueba y presione «Ejecutar»</h2>
+          <div id="consola-esperado" class="consola-esperado"></div>
+        </div>
+        <div class="consola-controles">
+          <span id="consola-reloj" class="reloj"></span>
+          <span id="consola-estado" class="pill pill-inactiva">en espera</span>
+          <button id="btn-cancelar" class="btn btn-secundario" hidden>Cancelar</button>
+        </div>
+      </div>
+      <pre id="salida" class="salida" tabindex="0" aria-live="off"></pre>
+      <div id="veredicto" class="veredicto" hidden></div>
+    </section>
+  </main>
+
+  <section class="historial" aria-label="Historial de ejecuciones">
+    <div class="historial-cabecera">
+      <h2>Historial de auditoría</h2>
+      <p>Cada ejecución queda registrada en <code>reportes/monitor/historial.jsonl</code> con su salida completa.</p>
+    </div>
+    <div class="tabla-scroll">
+      <table>
+        <thead><tr><th>Fecha</th><th>Prueba</th><th>Resultado</th><th>Resumen</th><th>Duración</th><th>Ejecutada por</th><th></th></tr></thead>
+        <tbody id="historial"></tbody>
+      </table>
+    </div>
+  </section>
+</body>
+</html>

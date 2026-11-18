@@ -7,7 +7,9 @@ Cada laboratorio tiene esta estructura:
 3. **Resultado esperado.** Lo obtuvimos al validar este manual el 16/11/2026; si su resultado difiere, algo cambió.
 4. **Evidencia para el informe:** qué capturar para los anexos.
 
-**Solo se necesita Docker Desktop.** Todas las herramientas corren en contenedores con su versión fijada, así que no hay que instalar Python, Semgrep, Trivy ni otras.
+**Solo se necesitan Docker Desktop y Node 22.** Todas las herramientas corren en contenedores con su versión fijada, así que no hay que instalar Python, Semgrep, Trivy ni otras.
+
+> **Atajo: todo con un comando y un clic.** `npm run laboratorio` prepara el entorno completo y abre el **Centro de pruebas**, una página donde cada laboratorio tiene un botón «Ejecutar». La salida se ve en vivo y el resultado se compara con el esperado (sección 0). Los comandos de este manual son los mismos que ejecuta el panel: sirven para entender qué pasa por dentro y para la exposición.
 
 Los comandos están escritos para **PowerShell** y se ejecutan desde la carpeta `ventas-online-segura`; los de WAF, Semgrep y base de datos se probaron en PowerShell 5.1. En Git Bash, reemplace `${PWD}` por `$(pwd -W)` y anteponga `MSYS_NO_PATHCONV=1` a cada `docker run`.
 
@@ -29,11 +31,57 @@ Los comandos están escritos para **PowerShell** y se ejecutan desde la carpeta 
 
 ---
 
-## 0. Preparación del entorno (una vez)
+## 0. Preparación del entorno
 
-**Requisitos:**
-- Docker Desktop encendido. Si `docker` no se reconoce, cierre y vuelva a abrir la terminal.
-- Node 22, solo para los laboratorios 2 y 9.
+### 0.1 Opción recomendada: un solo comando
+
+**Requisitos:** [Docker Desktop](https://www.docker.com/products/docker-desktop/), [Node 22 LTS](https://nodejs.org) y Git.
+
+```powershell
+git clone -b proyecto https://github.com/vm-exe/Seguridad-de-Aplicaciones---TecnoMarket.git
+cd Seguridad-de-Aplicaciones---TecnoMarket
+npm run laboratorio
+```
+
+Hace siete pasos y se puede repetir sin riesgo: lo que ya existe no se vuelve a crear.
+
+| Paso | Qué hace |
+|---|---|
+| 1. Requisitos | Verifica Node 22 y Docker; si Docker Desktop está cerrado, lo abre y espera |
+| 2. Secretos | Crea `.env.docker` con contraseñas y claves **aleatorias propias de su equipo** (nunca se suben a git) |
+| 3. Dependencias | `npm ci` desde el lockfile, sin scripts de instalación, y el navegador para las pruebas E2E |
+| 4. Imágenes | Construye la app, el WAF, las migraciones y las tareas (3 a 6 min la primera vez) |
+| 5. Base de datos | Migraciones, catálogo de ejemplo y un administrador con contraseña aleatoria, guardada en `reportes/credenciales-laboratorio.txt` |
+| 6. Servicios | Levanta la base de datos, la app, el WAF, el OTel Collector y Jaeger, y espera a que estén sanos |
+| 7. Panel | Abre el **Centro de pruebas** en el navegador |
+
+| Comando | Para qué |
+|---|---|
+| `npm run laboratorio` | Preparar y encender todo, y abrir el panel |
+| `npm run monitor` | Solo abrir el panel (el laboratorio ya está encendido) |
+| `npm run laboratorio -- estado` | Ver los contenedores |
+| `npm run laboratorio -- apagar` | Apagar; los datos se conservan |
+| `npm run laboratorio -- borrar --si` | Borrar la base de datos y los secretos locales para empezar de cero |
+
+**El Centro de pruebas** (`http://127.0.0.1:4000`) muestra los 17 laboratorios agrupados por fase. Cada uno trae su descripción, el resultado esperado y el responsable sugerido. Al presionar **Ejecutar**:
+- la salida de la herramienta aparece en vivo;
+- al terminar, el panel marca **APROBADA** o **FALLIDA** comparando con el resultado esperado;
+- los reportes generados (SARIF, SBOM, ZAP) quedan enlazados;
+- cada ejecución se guarda en el **historial de auditoría** (`reportes/monitor/historial.jsonl`) con fecha, duración, resultado, quién la ejecutó y la salida completa.
+
+En «Ataques contra el WAF», el panel muestra para cada ataque las reglas exactas del CRS que lo detuvieron y el enlace a su traza en Jaeger.
+
+**Seguridad del propio panel** (también es material para la exposición):
+- **Solo local:** escucha únicamente en `127.0.0.1`, así que otra computadora de la red no puede abrirlo.
+- **Token de acceso:** el enlace lleva un token aleatorio que cambia en cada arranque. Se canjea por una cookie `HttpOnly; SameSite=Strict`.
+- **Validación de origen:** valida la cabecera `Host` (contra *DNS rebinding*), y el `Origin` más una cabecera propia en cada acción (contra CSRF).
+- **Sin comandos libres:** no existe ningún campo para escribir comandos. El navegador solo envía el ID de una prueba del catálogo, y los programas se ejecutan **sin shell**, con argumentos fijos, así que no hay inyección de comandos posible.
+- **Ejecución acotada:** una prueba a la vez, con 10 minutos como máximo y botón para cancelarla.
+- **Salida protegida:** los secretos de `.env.docker` aparecen como `[oculto]`, y la salida de las herramientas se inserta como texto, nunca como HTML.
+- **CSP estricta:** el panel tiene una CSP estricta y los reportes HTML se abren aislados con `CSP: sandbox`.
+- **Fuera de Docker:** el panel corre en su equipo, no en un contenedor. Por eso no necesita montar el socket de Docker, lo que equivaldría a darle control total de la máquina. El panel no enciende ni apaga el laboratorio; eso se hace con el comando.
+
+### 0.2 Opción manual (lo mismo, paso a paso)
 
 ```powershell
 cd ventas-online-segura
@@ -72,12 +120,14 @@ Los correos de activación y recuperación de contraseña no se envían: quedan 
 ```powershell
 New-Item -ItemType Directory -Force reportes/sast | Out-Null
 docker run --rm -v "${PWD}:/src:ro" -v "${PWD}/reportes/sast:/out" semgrep/semgrep:1.140.0 `
-  semgrep scan --metrics=off --error `
+  semgrep scan --metrics=off --error --no-git-ignore `
   --config p/owasp-top-ten --config p/typescript --config p/react --config p/nextjs `
   --config /src/security/semgrep/reglas-ventas.yml `
   --json --output /out/semgrep.json --sarif-output=/out/semgrep.sarif /src/src /src/scripts
 ```
 **Resultado esperado:** `Ran 88 rules on 80 files: 0 findings.` y código de salida 0.
+
+> `--no-git-ignore` hace que Semgrep analice los archivos tal como están en el disco. Sin esa opción, dentro de un repositorio git solo revisa los archivos ya registrados en git, y el archivo de demostración de 1.2 (en `reportes/`, ignorado) daría «0 files».
 
 ### 1.2 Demostración: código vulnerable a propósito
 Cree el archivo `reportes/lab-sast/acciones-pago-demo.tsx`. La carpeta `reportes/` está en `.gitignore`, así que no se sube a git. Contenido:
@@ -104,7 +154,7 @@ export async function pagar(req: Request) {
 ```
 
 ```powershell
-docker run --rm -v "${PWD}:/src:ro" semgrep/semgrep:1.140.0 semgrep scan --metrics=off `
+docker run --rm -v "${PWD}:/src:ro" semgrep/semgrep:1.140.0 semgrep scan --metrics=off --no-git-ignore `
   --config /src/security/semgrep/reglas-ventas.yml /src/reportes/lab-sast
 ```
 

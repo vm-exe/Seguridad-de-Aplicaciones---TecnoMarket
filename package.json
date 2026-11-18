@@ -20,7 +20,9 @@
     "pagos:conciliar": "tsx --conditions=react-server --env-file=.env.local scripts/conciliar-pagos.ts",
     "test:cobertura": "vitest run --coverage",
     "e2e:limpiar": "tsx --conditions=react-server --env-file=.env.local scripts/limpiar-e2e.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "laboratorio": "node scripts/laboratorio.mjs",
+    "monitor": "node scripts/laboratorio.mjs monitor"
   },
   "dependencies": {
     "@opentelemetry/api": "1.9.1",

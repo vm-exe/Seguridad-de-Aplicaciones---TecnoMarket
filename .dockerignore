@@ -27,3 +27,7 @@ docs
 reportes
 playwright-report
 test-results
+# Panel de pruebas local (corre en el equipo del usuario, no en la imagen)
+monitor
+scripts/laboratorio.mjs
+e2e

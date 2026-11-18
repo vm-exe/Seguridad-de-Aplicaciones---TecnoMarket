@@ -66,6 +66,20 @@ Sin SMTP configurado, los enlaces de activación y de recuperación se imprimen 
 - Las credenciales de SMTP y PayPal que estaban en la tabla `configuracion` ya no viven en la base de datos. Ahora son variables de entorno.
 - Las compras cuyo cliente ya no existe en el sistema anterior se omiten y aparecen contadas en el resumen del script.
 
+## Inicio rápido: laboratorio y Centro de pruebas
+
+Requisitos: Docker Desktop, Node 22 y Git.
+
+```bash
+git clone -b proyecto https://github.com/vm-exe/Seguridad-de-Aplicaciones---TecnoMarket.git
+cd Seguridad-de-Aplicaciones---TecnoMarket
+npm run laboratorio
+```
+
+Ese comando genera secretos propios, construye las imágenes, migra la base de datos, carga el catálogo y crea un administrador. Luego levanta la tienda (http://localhost:8080) y Jaeger (http://localhost:16686), y abre el **Centro de pruebas** (http://127.0.0.1:4000): los 17 laboratorios de seguridad con un botón «Ejecutar», salida en vivo, veredicto contra el resultado esperado e historial de auditoría.
+
+Otros comandos: `npm run monitor` (solo el panel), `npm run laboratorio -- apagar`, `-- estado` y `-- borrar --si`. Detalle en `docs/LABORATORIOS.md` §0.
+
 ## Laboratorio con Docker (cloud-native)
 
 Arquitectura: WAF (Nginx + ModSecurity + OWASP CRS) → app sin privilegios → MySQL 8.4 en red interna. Solo el WAF publica un puerto. La evidencia de las pruebas y del afinamiento del WAF está en `docs/EVIDENCIA_LABORATORIO.md`. **El paso a paso de todos los laboratorios** (WAF, SAST, SCA, secretos, Trivy, IaC, ZAP, nmap y Burp), con resultados esperados, está en `docs/LABORATORIOS.md`.

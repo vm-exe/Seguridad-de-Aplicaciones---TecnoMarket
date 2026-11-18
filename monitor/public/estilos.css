@@ -1,0 +1,172 @@
+:root {
+  --fondo: #f4f6f9;
+  --superficie: #ffffff;
+  --superficie-2: #f8fafc;
+  --borde: #dde3ea;
+  --texto: #18212f;
+  --texto-2: #5a6678;
+  --acento: #1f5fd1;
+  --acento-texto: #ffffff;
+  --ok: #157a46;
+  --ok-fondo: #e3f5ea;
+  --mal: #b42318;
+  --mal-fondo: #fde8e6;
+  --aviso: #9a5b00;
+  --aviso-fondo: #fff3d6;
+  --neutro-fondo: #eef1f5;
+  --consola: #0f1720;
+  --consola-texto: #d7dee8;
+  --consola-tenue: #7d8a9c;
+  --radio: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #0c1118;
+    --superficie: #141b24;
+    --superficie-2: #18212c;
+    --borde: #263241;
+    --texto: #e6ebf2;
+    --texto-2: #9aa7b8;
+    --acento: #5b95f5;
+    --acento-texto: #0c1118;
+    --ok: #4ccb84;
+    --ok-fondo: #12301f;
+    --mal: #ff7b6e;
+    --mal-fondo: #3a1714;
+    --aviso: #f0b44c;
+    --aviso-fondo: #33260d;
+    --neutro-fondo: #1d2733;
+    --consola: #080c11;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+h1, h2, h3 { margin: 0; line-height: 1.25; }
+code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.92em; }
+a { color: var(--acento); }
+
+/* ---------------------------------------------------------------- cabecera */
+.cabecera {
+  display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between;
+  padding: 14px 24px; background: var(--superficie); border-bottom: 1px solid var(--borde);
+  position: sticky; top: 0; z-index: 2;
+}
+.titulo { display: flex; gap: 12px; align-items: center; }
+.logo { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: var(--acento); color: var(--acento-texto); }
+.titulo h1 { font-size: 17px; }
+.titulo p { margin: 0; color: var(--texto-2); font-size: 13px; }
+.estado-lab { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.servicios { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  background: var(--neutro-fondo); color: var(--texto-2); font-size: 12px; white-space: nowrap;
+}
+.punto { width: 8px; height: 8px; border-radius: 50%; background: var(--texto-2); }
+.punto.ok { background: var(--ok); }
+.punto.mal { background: var(--mal); }
+.punto.aviso { background: var(--aviso); }
+.enlaces { display: flex; gap: 8px; }
+.enlaces a {
+  padding: 5px 12px; border: 1px solid var(--borde); border-radius: 8px; text-decoration: none;
+  color: var(--texto); font-weight: 500; font-size: 13px;
+}
+.enlaces a:hover { border-color: var(--acento); color: var(--acento); }
+
+/* ---------------------------------------------------------------- distribución */
+.principal {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 20px;
+  padding: 20px 24px; align-items: start;
+}
+@media (max-width: 1000px) { .principal { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------------------------------------------------------------- catálogo */
+.resumen { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.categoria { margin-bottom: 22px; }
+.categoria-cabecera { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.categoria-cabecera h2 { font-size: 15px; }
+.fase { font-size: 12px; color: var(--texto-2); }
+.tarjeta {
+  background: var(--superficie); border: 1px solid var(--borde); border-radius: var(--radio);
+  padding: 14px 16px; margin-bottom: 10px; display: grid; gap: 8px;
+}
+.tarjeta.activa { border-color: var(--acento); box-shadow: 0 0 0 1px var(--acento); }
+.tarjeta-fila { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.tarjeta h3 { font-size: 15px; }
+.meta { color: var(--texto-2); font-size: 12.5px; }
+.descripcion { margin: 0; color: var(--texto); }
+.esperado { margin: 0; font-size: 13px; color: var(--texto-2); }
+.esperado strong { color: var(--texto); font-weight: 600; }
+.acciones { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.etiqueta-lab { font-size: 11.5px; color: var(--aviso); background: var(--aviso-fondo); padding: 1px 8px; border-radius: 999px; }
+
+.btn {
+  font: inherit; font-weight: 600; font-size: 13px; border-radius: 8px; padding: 6px 14px; cursor: pointer;
+  border: 1px solid transparent; background: var(--acento); color: var(--acento-texto);
+}
+.btn:hover:not(:disabled) { filter: brightness(1.08); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:focus-visible, .enlaces a:focus-visible, .enlace-sec:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+.btn-secundario { background: transparent; color: var(--texto); border-color: var(--borde); }
+.enlace-sec { font-size: 13px; font-weight: 500; }
+
+.pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pill-aprobada { background: var(--ok-fondo); color: var(--ok); }
+.pill-fallida, .pill-error { background: var(--mal-fondo); color: var(--mal); }
+.pill-cancelada, .pill-inactiva { background: var(--neutro-fondo); color: var(--texto-2); }
+.pill-en-curso { background: var(--aviso-fondo); color: var(--aviso); }
+
+/* ---------------------------------------------------------------- consola */
+.consola {
+  position: sticky; top: 86px; background: var(--superficie); border: 1px solid var(--borde);
+  border-radius: var(--radio); overflow: hidden; display: flex; flex-direction: column;
+  max-height: calc(100vh - 110px); min-height: 420px;
+}
+@media (max-width: 1000px) { .consola { position: static; max-height: none; } }
+.consola-cabecera { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; padding: 14px 16px; border-bottom: 1px solid var(--borde); }
+.consola-etiqueta { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--texto-2); font-weight: 600; }
+.consola-cabecera h2 { font-size: 16px; margin-top: 2px; }
+.consola-esperado { font-size: 13px; color: var(--texto-2); margin-top: 4px; }
+.consola-controles { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.reloj { font-variant-numeric: tabular-nums; color: var(--texto-2); font-size: 13px; }
+.salida {
+  flex: 1; margin: 0; padding: 14px 16px; overflow: auto; background: var(--consola); color: var(--consola-texto);
+  font: 12.5px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace; white-space: pre-wrap; word-break: break-word;
+  min-height: 300px;
+}
+.salida .l-titulo { color: #8ab4ff; font-weight: 600; }
+.salida .l-ok { color: #63d58f; }
+.salida .l-mal { color: #ff8a7d; }
+.salida .l-tenue { color: var(--consola-tenue); }
+.veredicto { padding: 12px 16px; border-top: 1px solid var(--borde); display: grid; gap: 6px; }
+.veredicto.aprobada { background: var(--ok-fondo); }
+.veredicto.fallida, .veredicto.error { background: var(--mal-fondo); }
+.veredicto.cancelada { background: var(--neutro-fondo); }
+.veredicto strong { font-size: 14px; }
+.veredicto .acciones { margin-top: 2px; }
+
+/* ---------------------------------------------------------------- historial */
+.historial { padding: 4px 24px 32px; }
+.historial-cabecera { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; margin-bottom: 10px; }
+.historial-cabecera h2 { font-size: 15px; }
+.historial-cabecera p { margin: 0; color: var(--texto-2); font-size: 13px; }
+.tabla-scroll { overflow-x: auto; background: var(--superficie); border: 1px solid var(--borde); border-radius: var(--radio); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--borde); vertical-align: top; }
+th { color: var(--texto-2); font-weight: 600; font-size: 12px; background: var(--superficie-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vacio { color: var(--texto-2); padding: 16px 12px; }
+
+@media (max-width: 640px) {
+  .cabecera, .principal, .historial { padding-left: 16px; padding-right: 16px; }
+  .consola-cabecera { flex-direction: column; }
+}
+.salida a.l-enlace { color: #8ab4ff; }

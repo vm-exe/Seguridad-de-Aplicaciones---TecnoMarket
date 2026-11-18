@@ -16,9 +16,19 @@ Documentos relacionados:
 |---|---|
 | `ANALISIS_MIGRACION.md` (raíz del repositorio) | Hallazgos del sistema PHP, STRIDE/DREAD, requisitos RS-01 a RS-22 y runbook |
 | `docs/DEVSECOPS.md` | Detalle del pipeline, el WAF y el SIEM |
-| `docs/LABORATORIOS.md` | **Manual paso a paso de los 11 laboratorios** (solo requiere Docker Desktop), con resultados esperados y lista de evidencias |
+| `docs/LABORATORIOS.md` | **Manual paso a paso de los 13 laboratorios** (Docker Desktop y Node 22), con resultados esperados y lista de evidencias |
 | `docs/EVIDENCIA_LABORATORIO.md` | Resultados reales del laboratorio Docker: ataques bloqueados, falsos positivos corregidos, ZAP antes y después |
 | `README.md` | Instalación |
+
+## Para empezar: un comando
+
+```bash
+git clone -b proyecto https://github.com/vm-exe/Seguridad-de-Aplicaciones---TecnoMarket.git
+cd Seguridad-de-Aplicaciones---TecnoMarket
+npm run laboratorio
+```
+
+Se abre el **Centro de pruebas**: cada prueba de esta guía tiene ahí un botón «Ejecutar», con la salida en vivo y el veredicto contra el resultado esperado. Para la exposición, cada integrante puede ejecutar sus pruebas desde el panel y luego explicar el comando que corrió por dentro, que es el mismo de `docs/LABORATORIOS.md`.
 
 ---
 
