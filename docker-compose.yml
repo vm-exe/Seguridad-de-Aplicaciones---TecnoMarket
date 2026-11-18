@@ -128,7 +128,7 @@ services:
   tareas:
     build:
       context: .
-      target: deps
+      target: tareas
     image: ventas-online-segura-tareas:local
     profiles: ["tareas"]
     env_file: .env.docker
@@ -137,6 +137,7 @@ services:
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
       - ./tsconfig.json:/app/tsconfig.json:ro
+      - uploads:/data/uploads   # el seed guarda aquí las fotos del catálogo de ejemplo
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     depends_on:

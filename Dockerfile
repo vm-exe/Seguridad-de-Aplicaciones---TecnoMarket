@@ -36,6 +36,16 @@ COPY src/db ./src/db
 USER node
 CMD ["npm", "run", "db:migrate"]
 
+# ---------- 3b) Tareas administrativas (seed, crear-admin, verificar auditoría) ----------
+# Corre con el MISMO uid que la app (1001): las imágenes del catálogo de ejemplo que guarda
+# quedan legibles para la app, y la tarea no necesita root. /data/uploads se crea aquí con
+# ese dueño para que el volumen "uploads" nazca con los permisos correctos aunque la
+# primera en montarlo sea esta etapa.
+FROM deps AS tareas
+RUN mkdir -p /data/uploads && chown 1001:1001 /data/uploads
+ENV HOME=/tmp npm_config_cache=/tmp/.npm npm_config_update_notifier=false
+USER 1001:1001
+
 # ---------- 4) Runtime ----------
 FROM node:22.20-alpine3.22 AS runner
 WORKDIR /app

@@ -176,14 +176,25 @@ async function iniciar({ conMonitor = true } = {}) {
 
   paso(7, T, "Panel de pruebas");
   if (!conMonitor) return;
+  await abrirPanel();
+}
+
+/** Abre el panel; si ya hay uno abierto, lo indica sin tratarlo como error. */
+async function abrirPanel() {
   const { iniciarMonitor } = await import("../monitor/servidor.mjs");
-  await iniciarMonitor().catch((e) => fallar(e.message));
+  try {
+    await iniciarMonitor();
+  } catch (e) {
+    if (e.code !== "PANEL_ABIERTO") fallar(e.message);
+    console.log(`  ${color("33", "!")} ${e.message}`);
+    info("Use esa ventana del navegador. Para abrir uno nuevo: cierre la otra terminal con Ctrl+C y ejecute «npm run monitor».");
+    info("Otro puerto: $env:MONITOR_PORT=4001; npm run monitor   (en Git Bash: MONITOR_PORT=4001 npm run monitor)");
+  }
 }
 
 async function soloMonitor() {
   if (!encontrarDocker()) info("Aviso: no se encontró Docker; solo funcionarán las pruebas unitarias.");
-  const { iniciarMonitor } = await import("../monitor/servidor.mjs");
-  await iniciarMonitor().catch((e) => fallar(e.message));
+  await abrirPanel();
 }
 
 async function apagar() {

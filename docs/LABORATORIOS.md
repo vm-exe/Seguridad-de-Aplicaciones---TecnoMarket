@@ -51,7 +51,7 @@ Hace siete pasos y se puede repetir sin riesgo: lo que ya existe no se vuelve a 
 | 2. Secretos | Crea `.env.docker` con contraseñas y claves **aleatorias propias de su equipo** (nunca se suben a git) |
 | 3. Dependencias | `npm ci` desde el lockfile, sin scripts de instalación, y el navegador para las pruebas E2E |
 | 4. Imágenes | Construye la app, el WAF, las migraciones y las tareas (3 a 6 min la primera vez) |
-| 5. Base de datos | Migraciones, catálogo de ejemplo y un administrador con contraseña aleatoria, guardada en `reportes/credenciales-laboratorio.txt` |
+| 5. Base de datos | Migraciones, catálogo de ejemplo con sus fotos y un administrador con contraseña aleatoria, guardada en `reportes/credenciales-laboratorio.txt` |
 | 6. Servicios | Levanta la base de datos, la app, el WAF, el OTel Collector y Jaeger, y espera a que estén sanos |
 | 7. Panel | Abre el **Centro de pruebas** en el navegador |
 

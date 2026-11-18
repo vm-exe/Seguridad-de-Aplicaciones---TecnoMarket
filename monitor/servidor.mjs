@@ -291,7 +291,7 @@ const servidor = createServer(async (req, res) => {
 export function iniciarMonitor({ abrir = true } = {}) {
   return new Promise((resolve, reject) => {
     servidor.once("error", (e) => {
-      if (e.code === "EADDRINUSE") reject(new Error(`El puerto ${PUERTO} está ocupado (¿ya hay un panel abierto?). Use MONITOR_PORT para cambiarlo.`));
+      if (e.code === "EADDRINUSE") reject(Object.assign(new Error(`Ya hay un panel abierto en el puerto ${PUERTO} (probablemente en otra terminal).`), { code: "PANEL_ABIERTO" }));
       else reject(e);
     });
     servidor.listen(PUERTO, "127.0.0.1", () => {
