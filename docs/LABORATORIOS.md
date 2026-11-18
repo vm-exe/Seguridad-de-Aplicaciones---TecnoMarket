@@ -59,9 +59,9 @@ Hace siete pasos y se puede repetir sin riesgo: lo que ya existe no se vuelve a 
 |---|---|
 | `npm run laboratorio` | Preparar y encender todo, y abrir el panel |
 | `npm run monitor` | Solo abrir el panel (el laboratorio ya está encendido) |
-| `npm run laboratorio -- estado` | Ver los contenedores |
-| `npm run laboratorio -- apagar` | Apagar; los datos se conservan |
-| `npm run laboratorio -- borrar --si` | Borrar la base de datos y los secretos locales para empezar de cero |
+| `npm run laboratorio:estado` | Ver los contenedores |
+| `npm run laboratorio:apagar` | Apagar; los datos se conservan |
+| `npm run laboratorio:borrar` | Borrar la base de datos y los secretos locales para empezar de cero (pide escribir BORRAR) |
 
 **El Centro de pruebas** (`http://127.0.0.1:4000`) muestra los 17 laboratorios agrupados por fase. Cada uno trae su descripción, el resultado esperado y el responsable sugerido. Al presionar **Ejecutar**:
 - la salida de la herramienta aparece en vivo;
@@ -123,7 +123,7 @@ docker run --rm -v "${PWD}:/src:ro" -v "${PWD}/reportes/sast:/out" semgrep/semgr
   semgrep scan --metrics=off --error --no-git-ignore `
   --config p/owasp-top-ten --config p/typescript --config p/react --config p/nextjs `
   --config /src/security/semgrep/reglas-ventas.yml `
-  --json --output /out/semgrep.json --sarif-output=/out/semgrep.sarif /src/src /src/scripts
+  --json --output /out/semgrep.json --sarif-output=/out/semgrep.sarif /src/src /src/scripts /src/monitor
 ```
 **Resultado esperado:** `Ran 88 rules on 80 files: 0 findings.` y código de salida 0.
 
@@ -180,6 +180,8 @@ La primera vez que corrimos Semgrep sobre el código real encontró **2 hallazgo
 2. **Falso positivo:** la regla propia `ventas-log-de-secretos` se activó con `logger.warn("requestPasswordReset")`, porque el texto contiene *password*. Se resolvió cambiando el mensaje, **no** silenciando la regla.
 
 Además, la regla `ventas-precio-desde-cliente` no cubría `src/lib/ordenes.ts` ni `paypal.ts`, que es donde vive la lógica de pagos. Se ampliaron sus rutas. **Lección:** las reglas SAST también deben revisarse.
+
+**Segundo caso, con el Centro de pruebas (17/11/2026): un falso positivo y un falso negativo en la misma función.** Al subir el panel, el pipeline falló porque `ventas-log-de-secretos` marcó `console.log("(enlace personal: el token cambia…)")`, un texto inofensivo que solo contiene la palabra *token*. La línea anterior, `console.log(enlace)`, **sí** imprime la credencial de acceso del panel, y la regla no la vio porque la variable se llama `enlace`. Imprimirla es intencional: así recibe el acceso quien inició el panel, en su propia terminal, como hace Jupyter. Quedó justificado en un comentario junto al código. **Lección:** una regla basada en nombres de variables produce ambos errores; SAST complementa la revisión humana, no la reemplaza.
 
 **Evidencia para el informe:**
 - captura de la salida de 1.1 con 0 hallazgos;

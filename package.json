@@ -22,7 +22,10 @@
     "e2e:limpiar": "tsx --conditions=react-server --env-file=.env.local scripts/limpiar-e2e.ts",
     "test:e2e": "playwright test",
     "laboratorio": "node scripts/laboratorio.mjs",
-    "monitor": "node scripts/laboratorio.mjs monitor"
+    "monitor": "node scripts/laboratorio.mjs monitor",
+    "laboratorio:estado": "node scripts/laboratorio.mjs estado",
+    "laboratorio:apagar": "node scripts/laboratorio.mjs apagar",
+    "laboratorio:borrar": "node scripts/laboratorio.mjs borrar"
   },
   "dependencies": {
     "@opentelemetry/api": "1.9.1",

@@ -298,8 +298,12 @@ export function iniciarMonitor({ abrir = true } = {}) {
       const enlace = `http://127.0.0.1:${PUERTO}/?token=${token}`;
       console.log("");
       console.log("  Panel de pruebas de seguridad");
+      // El enlace incluye la credencial de acceso A PROPÓSITO: es el canal para entregarla a quien
+      // inició el panel en su propia terminal (igual que Jupyter). Solo sirve desde 127.0.0.1 y
+      // cambia en cada arranque. (Semgrep no lo detecta porque la variable se llama "enlace":
+      // ejemplo de falso negativo de una regla basada en nombres.)
       console.log(`  ${enlace}`);
-      console.log("  (enlace personal: el token cambia cada vez que inicia el panel)");
+      console.log("  (enlace personal: cambia cada vez que inicia el panel)");
       console.log("  Ctrl+C para cerrar el panel. El laboratorio sigue encendido.");
       console.log("");
       if (abrir && process.env.MONITOR_SIN_NAVEGADOR !== "1") abrirNavegador(enlace);

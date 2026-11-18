@@ -2,11 +2,12 @@
 // =============================================================================
 // Comando único del laboratorio:
 //
-//   npm run laboratorio            prepara y levanta TODO, y abre el panel de pruebas
-//   npm run monitor                solo abre el panel (con el laboratorio ya encendido)
-//   npm run laboratorio -- estado  muestra los contenedores
-//   npm run laboratorio -- apagar  detiene el laboratorio (conserva los datos)
-//   npm run laboratorio -- borrar  detiene y BORRA la base de datos y los secretos locales
+//   npm run laboratorio           prepara y levanta TODO, y abre el panel de pruebas
+//   npm run monitor               solo abre el panel (con el laboratorio ya encendido)
+//   npm run laboratorio:estado    muestra los contenedores
+//   npm run laboratorio:apagar    detiene el laboratorio (conserva los datos)
+//   npm run laboratorio:borrar    detiene y BORRA la base de datos y los secretos locales
+// (Scripts separados y no "npm run laboratorio -- apagar": PowerShell consume el "--".)
 //
 // Es idempotente: si los secretos, los datos o el administrador ya existen, no los toca.
 // =============================================================================
@@ -14,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { ES_WINDOWS, RAIZ, dockerActivo, ejecutar, encontrarDocker, npmCli } from "../monitor/comun.mjs";
 
 const ENV_DOCKER = path.join(RAIZ, ".env.docker");
@@ -73,7 +75,7 @@ function generarEnvDocker(docker) {
   }
   // Si hay una base de datos de un laboratorio anterior, sus contraseñas no coincidirían.
   const vol = capturar(docker, ["volume", "ls", "-q", "--filter", `name=${PROYECTO}_dbdata`]).salida;
-  if (vol) fallar("Existe una base de datos de un laboratorio anterior, pero falta .env.docker con sus contraseñas.", "Ejecute «npm run laboratorio -- borrar» para empezar de cero.");
+  if (vol) fallar("Existe una base de datos de un laboratorio anterior, pero falta .env.docker con sus contraseñas.", "Ejecute «npm run laboratorio:borrar» para empezar de cero.");
 
   const hex = () => randomBytes(24).toString("hex");
   const b64 = () => randomBytes(32).toString("base64");
@@ -192,9 +194,15 @@ async function apagar() {
 
 async function borrar() {
   const docker = encontrarDocker() ?? fallar("No se encontró Docker.");
-  if (!process.argv.includes("--si")) {
-    console.log("\n  Esto BORRA la base de datos del laboratorio, las imágenes subidas, .env.docker y las credenciales locales.");
-    console.log("  Para confirmar: npm run laboratorio -- borrar --si\n");
+  console.log("\n  Esto BORRA la base de datos del laboratorio, las imágenes subidas, .env.docker y las credenciales locales.");
+  let confirmado = process.argv.includes("--si");
+  if (!confirmado && process.stdin.isTTY) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    confirmado = (await rl.question("  Escriba BORRAR para confirmar: ")).trim() === "BORRAR";
+    rl.close();
+  }
+  if (!confirmado) {
+    console.log("  No se borró nada. (Sin terminal interactiva: node scripts/laboratorio.mjs borrar --si)\n");
     return;
   }
   await correr(docker, ["compose", "--profile", "migrate", "--profile", "tareas", "down", "-v"]);
@@ -211,5 +219,5 @@ function mostrarEstado() {
 
 const comando = process.argv[2] ?? "iniciar";
 const acciones = { iniciar, monitor: soloMonitor, apagar, borrar, estado: mostrarEstado };
-if (!Object.hasOwn(acciones, comando)) fallar(`Comando desconocido: ${comando}`, "Use: iniciar | monitor | estado | apagar | borrar");
+if (!Object.hasOwn(acciones, comando)) fallar(`Comando desconocido: ${comando}`, "Use: npm run laboratorio, monitor, laboratorio:estado, laboratorio:apagar o laboratorio:borrar");
 await acciones[comando]();

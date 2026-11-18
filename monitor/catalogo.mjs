@@ -81,7 +81,7 @@ export const PRUEBAS = [
         "semgrep", "scan", "--metrics=off", "--error", "--no-git-ignore",
         "--config", "p/owasp-top-ten", "--config", "p/typescript", "--config", "p/react", "--config", "p/nextjs",
         "--config", "/src/security/semgrep/reglas-ventas.yml",
-        "--sarif-output=/out/semgrep.sarif", "/src/src", "/src/scripts"]);
+        "--sarif-output=/out/semgrep.sarif", "/src/src", "/src/scripts", "/src/monitor"]);
       return porCodigo(c, 0, "0 hallazgos en el código real", "Semgrep encontró hallazgos");
     },
   },

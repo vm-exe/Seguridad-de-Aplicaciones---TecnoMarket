@@ -20,9 +20,10 @@
     </div>
     <div class="estado-lab">
       <div id="servicios" class="servicios" aria-live="polite"><span class="chip">Consultando laboratorio…</span></div>
+      <!-- HTTP aceptado: servicios del laboratorio LOCAL, sin TLS (en la nube el TLS termina en el ALB). -->
       <nav class="enlaces">
-        <a href="http://localhost:8080" target="_blank" rel="noopener noreferrer">Tienda</a>
-        <a href="http://localhost:16686" target="_blank" rel="noopener noreferrer">Jaeger</a>
+        <a href="http://localhost:8080" target="_blank" rel="noopener noreferrer">Tienda</a> <!-- nosemgrep: html.security.plaintext-http-link.plaintext-http-link -->
+        <a href="http://localhost:16686" target="_blank" rel="noopener noreferrer">Jaeger</a> <!-- nosemgrep: html.security.plaintext-http-link.plaintext-http-link -->
       </nav>
     </div>
   </header>
