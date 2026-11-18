@@ -147,9 +147,13 @@ const linea =
   `SAST ${v("sast", "hallazgos")} hallazgos · Secretos ${v("secrets", "hallazgos")} · ` +
   `SCA ${v("sca", "audit_total")} vulns · IaC ${v("iac", "aprobados")} ok/${v("iac", "fallidos")} fallidos · ` +
   `Trivy app ${v("container", "app_criticas")}C/${v("container", "app_altas")}H · ` +
-  `E2E ${v("e2e", "aprobadas")}/${v("e2e", "fallidas")} fallidas · DAST ${v("dast", "altas")} altas`;
+  `E2E ${v("e2e", "aprobadas")} ok/${v("e2e", "fallidas")} fallidas · DAST ${v("dast", "altas")} altas`;
 console.log(`::${conProblema.length ? "error" : "notice"} title=Resumen de seguridad::${linea}`);
 // Si alguna cifra no llegó, se avisa (indica un paso de métricas que no pudo leer su reporte).
+// "detalle" y "desglose" pueden venir vacíos con normalidad (p. ej. 0 hallazgos).
+const OPCIONALES = new Set(["detalle", "desglose"]);
 const faltantes = controles.flatMap((c) =>
-  needs[c.job]?.result === "success" ? Object.entries(needs[c.job].outputs ?? {}).filter(([, x]) => x === "?" || x === "").map(([k]) => `${c.job}.${k}`) : []);
+  needs[c.job]?.result === "success"
+    ? Object.entries(needs[c.job].outputs ?? {}).filter(([k, x]) => !OPCIONALES.has(k) && (x === "?" || x === "")).map(([k]) => `${c.job}.${k}`)
+    : []);
 if (faltantes.length) console.log(`::warning title=Cifras sin datos::${faltantes.join(", ")}`);
