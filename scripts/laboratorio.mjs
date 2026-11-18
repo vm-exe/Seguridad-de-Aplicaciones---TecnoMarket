@@ -16,11 +16,17 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
-import { ES_WINDOWS, RAIZ, dockerActivo, ejecutar, encontrarDocker, npmCli } from "../monitor/comun.mjs";
+import os from "node:os";
+import { ES_WINDOWS, RAIZ, abrirNavegador, dockerActivo, ejecutar, encontrarDocker, npmCli } from "../monitor/comun.mjs";
 
 const ENV_DOCKER = path.join(RAIZ, ".env.docker");
 const CREDENCIALES = path.join(RAIZ, "reportes", "credenciales-laboratorio.txt");
 const PROYECTO = "ventas-online-segura";
+const PERFILES = ["--profile", "migrate", "--profile", "tareas", "--profile", "monitor"];
+// docker-compose.yml los usa para el contenedor del panel: la carpeta del proyecto vista desde
+// este equipo (para montarla en los contenedores de análisis) y quién ejecuta las pruebas.
+process.env.PROYECTO_HOST ??= RAIZ;
+process.env.MONITOR_USUARIO ??= `${os.userInfo().username}@${os.hostname()}`;
 
 const color = (c, t) => (process.stdout.isTTY ? `\x1b[${c}m${t}\x1b[0m` : t);
 const paso = (n, total, t) => console.log(`\n${color("1;34", `[${n}/${total}]`)} ${color("1", t)}`);
@@ -135,8 +141,8 @@ async function crearAdminSiFalta(docker) {
 }
 
 // ---------------------------------------------------------------------------- comandos
-async function iniciar({ conMonitor = true } = {}) {
-  const T = 7;
+async function iniciar() {
+  const T = 6;
   console.log(color("1", "\n  Laboratorio de Ventas Online Segura"));
   console.log(color("90", `  Carpeta: ${RAIZ}`));
 
@@ -147,59 +153,78 @@ async function iniciar({ conMonitor = true } = {}) {
   generarEnvDocker(docker);
   mkdirSync(path.join(RAIZ, "reportes", "correos"), { recursive: true });
 
-  paso(3, T, "Dependencias de Node (pruebas y panel)");
-  if (!existsSync(path.join(RAIZ, "node_modules", "vitest"))) {
-    info("Instalando dependencias exactas del lockfile (npm ci, sin scripts de instalación)…");
-    await correr(process.execPath, [npmCli(), "ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
-  }
-  ok("node_modules listo");
-  const pw = capturar(process.execPath, [path.join(RAIZ, "node_modules", "@playwright", "test", "cli.js"), "install", "chromium"]);
-  if (pw.codigo === 0) ok("Navegador de pruebas (Chromium) listo");
-  else info("No se pudo instalar Chromium para las pruebas E2E (las demás funcionan igual).");
+  paso(3, T, "Construcción de imágenes (la primera vez tarda de 5 a 10 minutos)");
+  await correr(docker, ["compose", ...PERFILES, "build"]);
+  ok("Imágenes construidas: app, WAF, migraciones, tareas y Centro de pruebas");
 
-  paso(4, T, "Construcción de imágenes (la primera vez tarda de 3 a 6 minutos)");
-  await correr(docker, ["compose", "--profile", "migrate", "--profile", "tareas", "build"]);
-  ok("Imágenes construidas: app, WAF, migraciones y tareas");
-
-  paso(5, T, "Base de datos y migraciones");
+  paso(4, T, "Base de datos y migraciones");
   await correr(docker, ["compose", "up", "-d", "--wait", "db"]);
   await correr(docker, ["compose", "--profile", "migrate", "run", "--rm", "migrate"]);
   ok("Esquema al día");
   await correr(docker, ["compose", "--profile", "tareas", "run", "--rm", "tareas", "npx", "tsx", "--conditions=react-server", "scripts/seed.ts"]);
-  ok("Catálogo de ejemplo cargado");
+  ok("Catálogo de ejemplo cargado (con fotos)");
   await crearAdminSiFalta(docker);
 
-  paso(6, T, "Aplicación, WAF y monitoreo");
+  paso(5, T, "Aplicación, WAF y monitoreo");
   await correr(docker, ["compose", "up", "-d", "--wait", "app", "waf", "otel-collector", "jaeger"]);
   ok("Tienda (solo a través del WAF):  http://localhost:8080");
   ok("Monitoreo de trazas (Jaeger):     http://localhost:16686");
 
-  paso(7, T, "Panel de pruebas");
-  if (!conMonitor) return;
-  await abrirPanel();
+  paso(6, T, "Centro de pruebas (contenedor ventas-monitor)");
+  await levantarPanel(docker);
 }
 
-/** Abre el panel; si ya hay uno abierto, lo indica sin tratarlo como error. */
-async function abrirPanel() {
+/** Levanta (o reutiliza) el contenedor del panel y abre su enlace con token. */
+async function levantarPanel(docker) {
+  // --build: si el código del panel cambió (p. ej. tras git pull) se reconstruye; si no, usa la caché.
+  await correr(docker, ["compose", "--profile", "monitor", "up", "-d", "--build", "--wait", "docker-proxy", "monitor"]);
+  const patron = /http:\/\/127\.0\.0\.1:\d+\/\?token=[\w-]+/g;
+  let enlace = null;
+  for (let i = 0; i < 20 && !enlace; i++) {
+    const logs = capturar(docker, ["logs", "ventas-monitor"]);
+    enlace = [...`${logs.salida}\n${logs.error}`.matchAll(patron)].pop()?.[0] ?? null;
+    if (!enlace) await esperar(1000);
+  }
+  if (!enlace) fallar("El panel no publicó su enlace.", "Revise los logs del contenedor ventas-monitor en Docker Desktop.");
+  ok("Centro de pruebas en el contenedor ventas-monitor (visible en Docker Desktop)");
+  console.log(`\n  ${color("1", "Abra este enlace")} (personal; cambia cada vez que se reinicia el contenedor):`);
+  console.log(`  ${enlace}\n`);
+  info("También está en los logs de ventas-monitor (Docker Desktop → Containers → ventas-monitor).");
+  if (process.env.MONITOR_SIN_NAVEGADOR !== "1") abrirNavegador(enlace);
+}
+
+async function soloMonitor() {
+  const docker = encontrarDocker() ?? fallar("No se encontró Docker.");
+  if (!dockerActivo()) fallar("Docker no está encendido.", "Abra Docker Desktop y vuelva a intentarlo.");
+  if (!existsSync(ENV_DOCKER)) fallar("El laboratorio no está preparado.", "Ejecute primero «npm run laboratorio».");
+  await levantarPanel(docker);
+}
+
+/** Panel en el propio equipo, sin contenedor (alternativa para desarrollo). */
+async function monitorLocal() {
+  if (!existsSync(path.join(RAIZ, "node_modules", "vitest"))) {
+    info("Instalando dependencias (npm ci, sin scripts de instalación)…");
+    await correr(process.execPath, [npmCli(), "ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
+    capturar(process.execPath, [path.join(RAIZ, "node_modules", "@playwright", "test", "cli.js"), "install", "chromium"]);
+  }
+  await servirPanel();
+}
+
+/** Servidor del panel (lo ejecuta el contenedor ventas-monitor, o monitorLocal). */
+async function servirPanel() {
   const { iniciarMonitor } = await import("../monitor/servidor.mjs");
   try {
     await iniciarMonitor();
   } catch (e) {
     if (e.code !== "PANEL_ABIERTO") fallar(e.message);
     console.log(`  ${color("33", "!")} ${e.message}`);
-    info("Use esa ventana del navegador. Para abrir uno nuevo: cierre la otra terminal con Ctrl+C y ejecute «npm run monitor».");
-    info("Otro puerto: $env:MONITOR_PORT=4001; npm run monitor   (en Git Bash: MONITOR_PORT=4001 npm run monitor)");
+    info("Si el contenedor ventas-monitor está encendido, use «npm run monitor» para ver su enlace.");
   }
-}
-
-async function soloMonitor() {
-  if (!encontrarDocker()) info("Aviso: no se encontró Docker; solo funcionarán las pruebas unitarias.");
-  await abrirPanel();
 }
 
 async function apagar() {
   const docker = encontrarDocker() ?? fallar("No se encontró Docker.");
-  await correr(docker, ["compose", "--profile", "migrate", "--profile", "tareas", "down"]);
+  await correr(docker, ["compose", ...PERFILES, "down"]);
   ok("Laboratorio detenido. Los datos se conservan; vuelva a encenderlo con «npm run laboratorio».");
 }
 
@@ -216,7 +241,7 @@ async function borrar() {
     console.log("  No se borró nada. (Sin terminal interactiva: node scripts/laboratorio.mjs borrar --si)\n");
     return;
   }
-  await correr(docker, ["compose", "--profile", "migrate", "--profile", "tareas", "down", "-v"]);
+  await correr(docker, ["compose", ...PERFILES, "down", "-v"]);
   rmSync(ENV_DOCKER, { force: true });
   rmSync(CREDENCIALES, { force: true });
   ok("Laboratorio borrado. «npm run laboratorio» lo crea de nuevo desde cero.");
@@ -224,11 +249,11 @@ async function borrar() {
 
 function mostrarEstado() {
   const docker = encontrarDocker() ?? fallar("No se encontró Docker.");
-  const r = capturar(docker, ["compose", "ps", "--all", "--format", "table {{.Service}}\t{{.Status}}\t{{.Ports}}"]);
+  const r = capturar(docker, ["compose", ...PERFILES, "ps", "--all", "--format", "table {{.Service}}\t{{.Status}}\t{{.Ports}}"]);
   console.log(r.salida || "  El laboratorio está apagado.");
 }
 
 const comando = process.argv[2] ?? "iniciar";
-const acciones = { iniciar, monitor: soloMonitor, apagar, borrar, estado: mostrarEstado };
+const acciones = { iniciar, monitor: soloMonitor, "monitor-local": monitorLocal, panel: servirPanel, apagar, borrar, estado: mostrarEstado };
 if (!Object.hasOwn(acciones, comando)) fallar(`Comando desconocido: ${comando}`, "Use: npm run laboratorio, monitor, laboratorio:estado, laboratorio:apagar o laboratorio:borrar");
 await acciones[comando]();

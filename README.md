@@ -76,9 +76,12 @@ cd Seguridad-de-Aplicaciones---TecnoMarket
 npm run laboratorio
 ```
 
-Ese comando genera secretos propios, construye las imágenes, migra la base de datos, carga el catálogo y crea un administrador. Luego levanta la tienda (http://localhost:8080) y Jaeger (http://localhost:16686), y abre el **Centro de pruebas** (http://127.0.0.1:4000): los 17 laboratorios de seguridad con un botón «Ejecutar», salida en vivo, veredicto contra el resultado esperado e historial de auditoría.
+Ese comando genera secretos propios, construye las imágenes, migra la base de datos, carga el catálogo con sus fotos y crea un administrador. Luego levanta todo en Docker, agrupado en Docker Desktop como `ventas-online-segura`:
+- la tienda (http://localhost:8080, solo a través del WAF);
+- Jaeger (http://localhost:16686);
+- el **Centro de pruebas** (http://127.0.0.1:4000, contenedor `ventas-monitor`): los 17 laboratorios de seguridad con un botón «Ejecutar», salida en vivo, veredicto contra el resultado esperado e historial de auditoría. Cada ejecución también queda en los logs del contenedor.
 
-Otros comandos: `npm run monitor` (solo el panel), `npm run laboratorio:estado`, `npm run laboratorio:apagar` y `npm run laboratorio:borrar`. Detalle en `docs/LABORATORIOS.md` §0.
+Otros comandos: `npm run monitor` (vuelve a mostrar el enlace del panel), `npm run laboratorio:estado`, `npm run laboratorio:apagar` y `npm run laboratorio:borrar`. Detalle en `docs/LABORATORIOS.md` §0.
 
 ## Laboratorio con Docker (cloud-native)
 

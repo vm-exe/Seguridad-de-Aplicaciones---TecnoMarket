@@ -35,7 +35,7 @@ Los comandos están escritos para **PowerShell** y se ejecutan desde la carpeta 
 
 ### 0.1 Opción recomendada: un solo comando
 
-**Requisitos:** [Docker Desktop](https://www.docker.com/products/docker-desktop/), [Node 22 LTS](https://nodejs.org) y Git.
+**Requisitos:** [Docker Desktop](https://www.docker.com/products/docker-desktop/), [Node 22 LTS](https://nodejs.org) y Git. Se necesitan unos 8 GB de RAM y 10 GB libres de disco para las imágenes.
 
 ```powershell
 git clone -b proyecto https://github.com/vm-exe/Seguridad-de-Aplicaciones---TecnoMarket.git
@@ -43,25 +43,39 @@ cd Seguridad-de-Aplicaciones---TecnoMarket
 npm run laboratorio
 ```
 
-Hace siete pasos y se puede repetir sin riesgo: lo que ya existe no se vuelve a crear.
+Hace seis pasos y se puede repetir sin riesgo: lo que ya existe no se vuelve a crear. Node solo se usa para ejecutar este comando, que no instala dependencias en su equipo: todo lo demás corre en contenedores.
 
 | Paso | Qué hace |
 |---|---|
 | 1. Requisitos | Verifica Node 22 y Docker; si Docker Desktop está cerrado, lo abre y espera |
 | 2. Secretos | Crea `.env.docker` con contraseñas y claves **aleatorias propias de su equipo** (nunca se suben a git) |
-| 3. Dependencias | `npm ci` desde el lockfile, sin scripts de instalación, y el navegador para las pruebas E2E |
-| 4. Imágenes | Construye la app, el WAF, las migraciones y las tareas (3 a 6 min la primera vez) |
-| 5. Base de datos | Migraciones, catálogo de ejemplo con sus fotos y un administrador con contraseña aleatoria, guardada en `reportes/credenciales-laboratorio.txt` |
-| 6. Servicios | Levanta la base de datos, la app, el WAF, el OTel Collector y Jaeger, y espera a que estén sanos |
-| 7. Panel | Abre el **Centro de pruebas** en el navegador |
+| 3. Imágenes | Construye la app, el WAF, las migraciones, las tareas y el Centro de pruebas (5 a 10 min la primera vez) |
+| 4. Base de datos | Migraciones, catálogo de ejemplo con sus fotos y un administrador con contraseña aleatoria, guardada en `reportes/credenciales-laboratorio.txt` |
+| 5. Servicios | Levanta la base de datos, la app, el WAF, el OTel Collector y Jaeger, y espera a que estén sanos |
+| 6. Centro de pruebas | Levanta `ventas-docker-proxy` y `ventas-monitor`, y abre el panel en el navegador |
+
+**En Docker Desktop** todo aparece agrupado en el proyecto `ventas-online-segura`:
+
+| Contenedor | Qué es | Puerto en su equipo |
+|---|---|---|
+| `ventas-waf` | Nginx + ModSecurity + OWASP CRS: la única entrada a la tienda | `8080` |
+| `ventas-app` | Next.js: frontend y backend en el mismo proceso | ninguno |
+| `ventas-db` | MySQL 8.4, en una red interna sin salida a internet | ninguno |
+| `ventas-otel-collector` | Recibe las trazas y oculta datos sensibles | ninguno |
+| `ventas-jaeger` | Visor de trazas | `127.0.0.1:16686` |
+| `ventas-monitor` | Centro de pruebas | `127.0.0.1:4000` |
+| `ventas-docker-proxy` | API de Docker restringida, usada solo por el panel | ninguno |
+
+En **Docker Desktop → Containers → ventas-monitor → Logs** se ve en vivo cada prueba que se ejecuta desde el panel, con el nombre de la prueba al inicio de cada línea. Allí también aparece el enlace de acceso con token.
 
 | Comando | Para qué |
 |---|---|
 | `npm run laboratorio` | Preparar y encender todo, y abrir el panel |
-| `npm run monitor` | Solo abrir el panel (el laboratorio ya está encendido) |
+| `npm run monitor` | Volver a abrir el panel (muestra el enlace con token) |
 | `npm run laboratorio:estado` | Ver los contenedores |
 | `npm run laboratorio:apagar` | Apagar; los datos se conservan |
 | `npm run laboratorio:borrar` | Borrar la base de datos y los secretos locales para empezar de cero (pide escribir BORRAR) |
+| `npm run monitor:local` | Alternativa: el panel como proceso de su equipo, sin contenedor |
 
 **El Centro de pruebas** (`http://127.0.0.1:4000`) muestra los 17 laboratorios agrupados por fase. Cada uno trae su descripción, el resultado esperado y el responsable sugerido. Al presionar **Ejecutar**:
 - la salida de la herramienta aparece en vivo;
@@ -72,14 +86,27 @@ Hace siete pasos y se puede repetir sin riesgo: lo que ya existe no se vuelve a 
 En «Ataques contra el WAF», el panel muestra para cada ataque las reglas exactas del CRS que lo detuvieron y el enlace a su traza en Jaeger.
 
 **Seguridad del propio panel** (también es material para la exposición):
-- **Solo local:** escucha únicamente en `127.0.0.1`, así que otra computadora de la red no puede abrirlo.
-- **Token de acceso:** el enlace lleva un token aleatorio que cambia en cada arranque. Se canjea por una cookie `HttpOnly; SameSite=Strict`.
+- **Solo local:** se publica únicamente en `127.0.0.1:4000`, así que otra computadora de la red no puede abrirlo.
+- **Token de acceso:** el enlace lleva un token aleatorio que cambia en cada arranque del contenedor. Se canjea por una cookie `HttpOnly; SameSite=Strict`.
 - **Validación de origen:** valida la cabecera `Host` (contra *DNS rebinding*), y el `Origin` más una cabecera propia en cada acción (contra CSRF).
 - **Sin comandos libres:** no existe ningún campo para escribir comandos. El navegador solo envía el ID de una prueba del catálogo, y los programas se ejecutan **sin shell**, con argumentos fijos, así que no hay inyección de comandos posible.
 - **Ejecución acotada:** una prueba a la vez, con 10 minutos como máximo y botón para cancelarla.
 - **Salida protegida:** los secretos de `.env.docker` aparecen como `[oculto]`, y la salida de las herramientas se inserta como texto, nunca como HTML.
 - **CSP estricta:** el panel tiene una CSP estricta y los reportes HTML se abren aislados con `CSP: sandbox`.
-- **Fuera de Docker:** el panel corre en su equipo, no en un contenedor. Por eso no necesita montar el socket de Docker, lo que equivaldría a darle control total de la máquina. El panel no enciende ni apaga el laboratorio; eso se hace con el comando.
+- **Contenedor endurecido:** usuario sin privilegios, sin capacidades de Linux, `no-new-privileges`. La imagen no tiene npm, yarn ni herramientas que el panel no usa, y Trivy da 0 vulnerabilidades CRITICAL/HIGH con parche.
+
+**Riesgo aceptado: acceso a la API de Docker.** Para lanzar Semgrep, Trivy o ZAP, el panel necesita crear contenedores. Quien puede crear contenedores con montajes controla el equipo, así que es un acceso equivalente a administrador. Se acepta **solo en el laboratorio local**, con estas mitigaciones:
+- **El panel nunca toca el socket real de Docker:** solo `ventas-docker-proxy` lo monta, en solo lectura.
+- **El proxy permite solo lo necesario:** contenedores, imágenes, `exec` e `info`, y bloquea el resto. Verificado desde el panel:
+
+| Operación | Resultado |
+|---|---|
+| `docker ps`, `docker run`, `docker logs`, `docker exec` | Permitidas (las usan las pruebas) |
+| `docker build`, `network create`, `volume ls`, `system df`, `swarm`, `secret`, `plugin` | **403 Forbidden** |
+
+- **El panel no enciende ni apaga el laboratorio.** Eso se hace con el comando.
+
+En producción **nunca** se expone la API de Docker a una aplicación web. Los análisis corren en el pipeline de CI (laboratorio 11), donde cada ejecución es una máquina desechable.
 
 ### 0.2 Opción manual (lo mismo, paso a paso)
 
@@ -90,7 +117,7 @@ Copy-Item .env.docker.example .env.docker
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 # (las contraseñas de BD deben coincidir con las de DATABASE_URL / MIGRATOR_DATABASE_URL)
 
-docker compose --profile migrate --profile tareas build      # 3-5 min la primera vez
+docker compose --profile migrate --profile tareas build      # 3-5 min la primera vez (el panel: --profile monitor)
 docker compose up -d db
 docker compose --profile migrate run --rm migrate             # crea las tablas (usuario DDL)
 docker compose --profile tareas run --rm tareas npx tsx --conditions=react-server scripts/seed.ts

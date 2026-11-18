@@ -10,14 +10,18 @@
 //  - Los secretos de .env.docker se reemplazan por [oculto] en la salida y en el historial.
 //  - CSP estricta en el panel; los reportes HTML (ZAP) se sirven aislados con CSP sandbox.
 import { createServer } from "node:http";
+import net from "node:net";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CATEGORIAS, PRUEBAS, PRUEBAS_POR_ID } from "./catalogo.mjs";
-import { RAIZ, abrirNavegador, ejecutar, encontrarDocker, ocultarSecretos, secretosConocidos, terminarArbol } from "./comun.mjs";
+import { EN_CONTENEDOR, RAIZ, abrirNavegador, ejecutar, encontrarDocker, ocultarSecretos, secretosConocidos, terminarArbol } from "./comun.mjs";
 
 const PUERTO = Number(process.env.MONITOR_PORT ?? 4000);
+// En el contenedor escucha en todas sus interfaces; docker-compose solo lo publica en 127.0.0.1 del equipo.
+const INTERFAZ = process.env.MONITOR_HOST ?? "127.0.0.1";
+const USUARIO = process.env.MONITOR_USUARIO || `${os.userInfo().username}@${os.hostname()}`;
 const HOSTS_VALIDOS = new Set([`127.0.0.1:${PUERTO}`, `localhost:${PUERTO}`]);
 const ORIGENES_VALIDOS = new Set([`http://127.0.0.1:${PUERTO}`, `http://localhost:${PUERTO}`]);
 const DIR_PUBLICO = path.join(RAIZ, "monitor", "public");
@@ -102,6 +106,8 @@ async function iniciarEjecucion(prueba) {
 
   const log = (linea) => {
     const l = ocultarSecretos(String(linea), secretos);
+    // También a la salida estándar: en Docker Desktop queda en los logs de ventas-monitor.
+    console.log(`[${prueba.id}] ${l}`);
     ej.lineas.push(l);
     if (ej.lineas.length > 20_000) ej.lineas.splice(0, 1000);
     emitir(ej, "linea", l);
@@ -152,7 +158,7 @@ async function iniciarEjecucion(prueba) {
     id, prueba: prueba.id, nombre: prueba.nombre, herramienta: prueba.herramienta,
     inicio: ej.inicio, fin: ej.fin, duracionMs: Date.parse(ej.fin) - Date.parse(ej.inicio),
     resultado: veredicto.resultado, resumen: veredicto.resumen,
-    ejecutadaPor: `${os.userInfo().username}@${os.hostname()}`,
+    ejecutadaPor: USUARIO,
   };
   mkdirSync(path.join(DIR_HISTORIAL, "logs"), { recursive: true });
   writeFileSync(path.join(DIR_HISTORIAL, "logs", `${id}.log`), ej.lineas.join("\n"), "utf8");
@@ -183,14 +189,18 @@ function cancelar(ej, motivo) {
 async function estadoLaboratorio() {
   const docker = encontrarDocker();
   if (!docker) return { docker: false, servicios: [] };
+  // docker ps con la etiqueta del proyecto (no requiere docker compose ni los archivos del proyecto).
   let salida = "";
-  const { fin } = ejecutar(docker, ["compose", "ps", "--all", "--format", "json"], { alLinea: (l) => (salida += l + "\n") });
-  const codigo = await fin;
-  if (codigo !== 0) return { docker: false, servicios: [] };
-  const servicios = salida.split("\n").filter((l) => l.trim().startsWith("{")).map((l) => {
-    const s = JSON.parse(l);
-    return { servicio: s.Service, estado: s.State, salud: s.Health || "", puertos: s.Publishers?.filter((p) => p.PublishedPort).map((p) => `${p.URL}:${p.PublishedPort}`) ?? [] };
-  });
+  const { fin } = ejecutar(docker, ["ps", "-a", "--filter", "label=com.docker.compose.project=ventas-online-segura", "--format", "{{json .}}"], { alLinea: (l) => (salida += l + "\n") });
+  if ((await fin) !== 0) return { docker: false, servicios: [] };
+  const servicios = salida.split("\n").filter((l) => l.trim().startsWith("{")).map((l) => JSON.parse(l))
+    .filter((c) => !/-run-/.test(c.Names))
+    .map((c) => {
+      const servicio = /com\.docker\.compose\.service=([^,]+)/.exec(c.Labels ?? "")?.[1] ?? c.Names;
+      const salud = /\((healthy|unhealthy|health: starting)\)/.exec(c.Status ?? "")?.[1] ?? "";
+      return { servicio, estado: c.State, salud: salud === "health: starting" ? "starting" : salud };
+    })
+    .sort((a, b) => a.servicio.localeCompare(b.servicio));
   return { docker: true, servicios };
 }
 
@@ -288,13 +298,39 @@ const servidor = createServer(async (req, res) => {
   }
 });
 
+/**
+ * Dentro del contenedor, "localhost:8080" y "localhost:16686" no existen. Se reenvían al WAF y a
+ * Jaeger por la red interna, para que las pruebas usen las MISMAS URL que en el equipo (la app
+ * valida que el Origin sea http://localhost:8080; con "waf:8080" rechazaría los formularios).
+ */
+function reenviarPuertosDelLaboratorio() {
+  for (const [puerto, destino] of [[8080, "waf"], [16686, "jaeger"]]) {
+    net
+      .createServer((cliente) => {
+        const remoto = net.connect(puerto, destino);
+        cliente.pipe(remoto).pipe(cliente);
+        const cerrar = () => { cliente.destroy(); remoto.destroy(); };
+        cliente.on("error", cerrar);
+        remoto.on("error", cerrar);
+      })
+      .on("error", (e) => console.error(`No se pudo reenviar localhost:${puerto} → ${destino}: ${e.message}`))
+      .listen(puerto, "127.0.0.1");
+  }
+}
+
 export function iniciarMonitor({ abrir = true } = {}) {
   return new Promise((resolve, reject) => {
     servidor.once("error", (e) => {
       if (e.code === "EADDRINUSE") reject(Object.assign(new Error(`Ya hay un panel abierto en el puerto ${PUERTO} (probablemente en otra terminal).`), { code: "PANEL_ABIERTO" }));
       else reject(e);
     });
-    servidor.listen(PUERTO, "127.0.0.1", () => {
+    if (EN_CONTENEDOR) {
+      reenviarPuertosDelLaboratorio();
+      if (!process.env.PROYECTO_HOST) {
+        console.warn("AVISO: falta PROYECTO_HOST; los análisis que montan el proyecto fallarán. Levante el panel con «npm run laboratorio» o «npm run monitor».");
+      }
+    }
+    servidor.listen(PUERTO, INTERFAZ, () => {
       const enlace = `http://127.0.0.1:${PUERTO}/?token=${token}`;
       console.log("");
       console.log("  Panel de pruebas de seguridad");

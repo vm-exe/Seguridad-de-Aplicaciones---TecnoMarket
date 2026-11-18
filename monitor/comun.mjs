@@ -12,6 +12,24 @@ export const RAIZ = path
   .resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
   .replace(/^[a-z]:/, (u) => u.toUpperCase());
 
+/** true cuando el panel corre dentro de su contenedor (servicio "monitor" de docker-compose). */
+export const EN_CONTENEDOR = process.env.MONITOR_EN_CONTENEDOR === "1";
+
+/**
+ * Las herramientas de análisis corren en contenedores propios, y Docker monta rutas del EQUIPO
+ * ANFITRIÓN, no del contenedor del panel. PROYECTO_HOST es la carpeta del proyecto vista desde el
+ * anfitrión (Windows: "E:\...", Linux/macOS: "/home/..."); fuera de un contenedor coincide con RAIZ.
+ */
+export const PROYECTO_HOST = process.env.PROYECTO_HOST || RAIZ;
+const rutasHost = /^[A-Za-z]:\\/.test(PROYECTO_HOST) ? path.win32 : path.posix;
+export const rutaHost = (...partes) => rutasHost.join(PROYECTO_HOST, ...partes);
+
+/** Montaje bind con --mount (a diferencia de -v, no se confunde con los ":" de "E:\"). */
+export const montaje = (origen, destino, soloLectura = false) => [
+  "--mount",
+  `type=bind,source=${origen},target=${destino}${soloLectura ? ",readonly" : ""}`,
+];
+
 /** Ruta del CLI de npm (npm la expone al ejecutar "npm run"); permite invocarlo sin shell. */
 export function npmCli() {
   const candidatos = [
@@ -123,7 +141,9 @@ export function terminarArbol(hijo) {
 export function abrirNavegador(url) {
   const [prog, args] = ES_WINDOWS ? ["explorer.exe", [url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
   try {
-    spawn(prog, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    const hijo = spawn(prog, args, { detached: true, stdio: "ignore", windowsHide: true });
+    hijo.on("error", () => {}); // sin navegador (p. ej. en un contenedor): la URL ya se imprimió
+    hijo.unref();
   } catch {
     /* sin navegador: la URL ya se imprimió en la consola */
   }

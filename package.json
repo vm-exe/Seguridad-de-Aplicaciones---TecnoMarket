@@ -25,7 +25,8 @@
     "monitor": "node scripts/laboratorio.mjs monitor",
     "laboratorio:estado": "node scripts/laboratorio.mjs estado",
     "laboratorio:apagar": "node scripts/laboratorio.mjs apagar",
-    "laboratorio:borrar": "node scripts/laboratorio.mjs borrar"
+    "laboratorio:borrar": "node scripts/laboratorio.mjs borrar",
+    "monitor:local": "node scripts/laboratorio.mjs monitor-local"
   },
   "dependencies": {
     "@opentelemetry/api": "1.9.1",

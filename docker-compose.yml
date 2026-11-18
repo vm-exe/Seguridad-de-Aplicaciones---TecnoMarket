@@ -201,6 +201,64 @@ services:
     mem_limit: 512m
     networks: [observabilidad, monitoreo]
 
+  # ---------------------------------------------------------------------------
+  # Centro de pruebas de seguridad (perfil "monitor"; lo levanta «npm run laboratorio»).
+  # http://127.0.0.1:4000 — el enlace con token aparece en los logs de ventas-monitor.
+  #
+  # RIESGO ACEPTADO DEL LABORATORIO: para lanzar Semgrep, Trivy, ZAP, etc., el panel necesita la
+  # API de Docker, y quien crea contenedores con montajes controla el equipo. Mitigaciones:
+  #   - el socket real solo lo monta docker-proxy, en solo lectura, y expone únicamente las rutas
+  #     de la API necesarias (contenedores, imágenes, exec); swarm, secretos, plugins, build y
+  #     system quedan bloqueados;
+  #   - el panel no tiene comandos libres (solo IDs del catálogo), exige token y solo escucha en
+  #     127.0.0.1 del equipo; no corre como root y no tiene capacidades de Linux.
+  # En producción NUNCA se expone la API de Docker a una aplicación web.
+  # ---------------------------------------------------------------------------
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    container_name: ventas-docker-proxy
+    profiles: ["monitor"]
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      IMAGES: "1"
+      EXEC: "1"
+      INFO: "1"
+      POST: "1"
+      ALLOW_START: "1"
+      ALLOW_STOP: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs: ["/run", "/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [docker-api]
+
+  monitor:
+    build:
+      context: .
+      dockerfile: monitor/Dockerfile
+    image: ventas-monitor:local
+    container_name: ventas-monitor
+    profiles: ["monitor"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4000:4000"
+    environment:
+      MONITOR_HOST: 0.0.0.0
+      DOCKER_HOST: tcp://docker-proxy:2375
+      # Carpeta del proyecto vista desde el equipo (la define «npm run laboratorio»).
+      PROYECTO_HOST: ${PROYECTO_HOST:-}
+      MONITOR_USUARIO: ${MONITOR_USUARIO:-}
+    volumes:
+      - ./reportes:/proyecto/reportes            # historial, logs y reportes, visibles en el equipo
+      - ./.env.docker:/proyecto/.env.docker:ro   # para ocultar los secretos en la salida
+    shm_size: "512m" # Chromium (pruebas E2E)
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [docker-proxy]
+    networks: [frontend, observabilidad, docker-api]
+
 networks:
   frontend:
     driver: bridge
@@ -213,6 +271,10 @@ networks:
     internal: true
   # Solo para publicar la interfaz de Jaeger en 127.0.0.1 (una red interna no publica puertos).
   monitoreo:
+    driver: bridge
+  # API de Docker restringida (docker-proxy) para el panel y los análisis de Trivy.
+  # No es interna: Trivy necesita descargar su base de vulnerabilidades.
+  docker-api:
     driver: bridge
 
 volumes:

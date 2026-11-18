@@ -1,14 +1,17 @@
 // Catálogo de pruebas del panel. Cada prueba ejecuta EXACTAMENTE los comandos documentados en
 // docs/LABORATORIOS.md, con versiones fijadas, y compara el resultado con el esperado.
 // Ningún comando recibe datos del navegador: el panel solo envía el id de la prueba.
-import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { RAIZ, npmCli } from "./comun.mjs";
+import { EN_CONTENEDOR, RAIZ, montaje, rutaHost } from "./comun.mjs";
 
 const WAF = "http://localhost:8080";
 const JAEGER = "http://localhost:16686";
 const rep = (...p) => path.join(RAIZ, "reportes", ...p);
 const asegurarDir = (...p) => mkdirSync(rep(...p), { recursive: true });
+// Momento de la última prueba de fuerza bruta: agota el límite de nginx para formularios de
+// autenticación (10/min por IP), que también usan las pruebas E2E al registrar usuarios.
+let ultimaFuerzaBruta = 0;
 
 const IMG = {
   semgrep: "semgrep/semgrep:1.140.0",
@@ -17,8 +20,17 @@ const IMG = {
   trivy: "aquasec/trivy:0.67.2",
   checkov: "bridgecrew/checkov:3.2.495",
   zap: "ghcr.io/zaproxy/zaproxy:stable",
+  // npm audit en su propio contenedor: igual en cualquier equipo y sin npm dentro del panel.
+  node: "node:22.23.3-bookworm-slim",
 };
-const SOCKET = ["-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", "trivy-cache:/root/.cache"];
+// Trivy necesita la API de Docker para leer las imágenes locales. Dentro del contenedor del panel
+// se usa el proxy restringido (nunca el socket real); fuera, el socket del equipo.
+const SOCKET = EN_CONTENEDOR
+  ? ["--network", "ventas-online-segura_docker-api", "-e", "DOCKER_HOST=tcp://docker-proxy:2375", "-v", "trivy-cache:/root/.cache"]
+  : ["-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", "trivy-cache:/root/.cache"];
+// Carpeta del proyecto y de reportes, como rutas del equipo anfitrión (lo que Docker sabe montar).
+const PROYECTO_RO = (destino) => montaje(rutaHost(), destino, true);
+const REPORTE = (sub, destino) => montaje(rutaHost("reportes", sub), destino);
 
 const DEMO_SAST = `import { sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -77,7 +89,7 @@ export const PRUEBAS = [
     reportes: [{ nombre: "SARIF", ruta: "sast/semgrep.sarif" }],
     async ejecutar(ctx) {
       asegurarDir("sast");
-      const c = await ctx.dockerRun(["-v", `${RAIZ}:/src:ro`, "-v", `${rep("sast")}:/out`, IMG.semgrep,
+      const c = await ctx.dockerRun([...PROYECTO_RO("/src"), ...REPORTE("sast", "/out"), IMG.semgrep,
         "semgrep", "scan", "--metrics=off", "--error", "--no-git-ignore",
         "--config", "p/owasp-top-ten", "--config", "p/typescript", "--config", "p/react", "--config", "p/nextjs",
         "--config", "/src/security/semgrep/reglas-ventas.yml",
@@ -100,7 +112,7 @@ export const PRUEBAS = [
       writeFileSync(rep("lab-sast", "acciones-pago-demo.tsx"), DEMO_SAST);
       ctx.log("Archivo de demostración: reportes/lab-sast/acciones-pago-demo.tsx");
       let salida = "";
-      const c = await ctx.dockerRun(["-v", `${RAIZ}:/src:ro`, IMG.semgrep, "semgrep", "scan", "--metrics=off", "--error", "--no-git-ignore",
+      const c = await ctx.dockerRun([...PROYECTO_RO("/src"), IMG.semgrep, "semgrep", "scan", "--metrics=off", "--error", "--no-git-ignore",
         "--config", "/src/security/semgrep/reglas-ventas.yml", "/src/reportes/lab-sast"], { alSalida: (l) => (salida += l + "\n") });
       const n = Number(/(\d+) findings?\./.exec(salida)?.[1] ?? /(\d+) Code Findings?/.exec(salida)?.[1] ?? -1);
       return c === 1 && n === 7
@@ -120,10 +132,10 @@ export const PRUEBAS = [
     reportes: [],
     async ejecutar(ctx) {
       ctx.log("== npm audit (producción, falla en HIGH/CRITICAL)");
-      const a = await ctx.correr(process.execPath, [npmCli(), "audit", "--omit=dev", "--omit=optional", "--audit-level=high"]);
+      const a = await ctx.dockerRun([...PROYECTO_RO("/src"), "-w", "/src", IMG.node, "npm", "audit", "--omit=dev", "--omit=optional", "--audit-level=high"]);
       ctx.log("");
       ctx.log("== OSV-Scanner (lockfile completo)");
-      const o = await ctx.dockerRun(["-v", `${RAIZ}:/src:ro`, IMG.osv, "scan", "source", "--config", "/src/osv-scanner.toml", "--lockfile", "/src/package-lock.json"]);
+      const o = await ctx.dockerRun([...PROYECTO_RO("/src"), IMG.osv, "scan", "source", "--config", "/src/osv-scanner.toml", "--lockfile", "/src/package-lock.json"]);
       if (a === 0 && o === 0) return { resultado: "aprobada", resumen: "Sin vulnerabilidades no aceptadas" };
       return { resultado: "fallida", resumen: `npm audit: código ${a}; OSV: código ${o}` };
     },
@@ -139,8 +151,8 @@ export const PRUEBAS = [
     duracion: "30 s",
     reportes: [],
     async ejecutar(ctx) {
-      if (!existsSync(path.join(RAIZ, ".git"))) return { resultado: "fallida", resumen: "Esta carpeta no es un clon de git: use git clone para obtener el proyecto" };
-      const c = await ctx.dockerRun(["-v", `${RAIZ}:/repo:ro`, IMG.gitleaks, "git", "/repo", "--config", "/repo/.gitleaks.toml", "--no-banner", "--redact", "--verbose"]);
+      if (!EN_CONTENEDOR && !existsSync(path.join(RAIZ, ".git"))) return { resultado: "fallida", resumen: "Esta carpeta no es un clon de git: use git clone para obtener el proyecto" };
+      const c = await ctx.dockerRun([...PROYECTO_RO("/repo"), IMG.gitleaks, "git", "/repo", "--config", "/repo/.gitleaks.toml", "--no-banner", "--redact", "--verbose"]);
       return porCodigo(c, 0, "Ningún secreto en el historial", "Gitleaks encontró secretos en el historial");
     },
   },
@@ -156,7 +168,7 @@ export const PRUEBAS = [
     reportes: [{ nombre: "JSON (valores ocultos)", ruta: "secretos/gitleaks.json" }],
     async ejecutar(ctx) {
       asegurarDir("secretos");
-      await ctx.dockerRun(["-v", `${RAIZ}:/repo:ro`, "-v", `${rep("secretos")}:/out`, IMG.gitleaks, "dir", "/repo",
+      await ctx.dockerRun([...PROYECTO_RO("/repo"), ...REPORTE("secretos", "/out"), IMG.gitleaks, "dir", "/repo",
         "--config", "/repo/.gitleaks.toml", "--no-banner", "--redact", "--report-format", "json", "--report-path", "/out/gitleaks.json"]);
       let hallazgos = [];
       try {
@@ -189,7 +201,7 @@ export const PRUEBAS = [
       const c = await ctx.dockerRun([...SOCKET, IMG.trivy, "image", "--quiet", "--scanners", "vuln,secret", "--severity", "CRITICAL,HIGH", "--ignore-unfixed", "--exit-code", "1", "ventas-online-segura:local"]);
       ctx.log("");
       ctx.log("== SBOM (CycloneDX)");
-      await ctx.dockerRun([...SOCKET, "-v", `${rep("trivy")}:/out`, IMG.trivy, "image", "--quiet", "--format", "cyclonedx", "--output", "/out/sbom-imagen.json", "ventas-online-segura:local"]);
+      await ctx.dockerRun([...SOCKET, ...REPORTE("trivy", "/out"), IMG.trivy, "image", "--quiet", "--format", "cyclonedx", "--output", "/out/sbom-imagen.json", "ventas-online-segura:local"]);
       return porCodigo(c, 0, "0 CRITICAL/HIGH con parche", "Hay vulnerabilidades con parche disponible");
     },
   },
@@ -237,12 +249,12 @@ export const PRUEBAS = [
     reportes: [],
     async ejecutar(ctx) {
       ctx.log("== Checkov");
-      const ck = await ctx.dockerRun(["-v", `${RAIZ}:/src:ro`, "-w", "/src", IMG.checkov, "-d", ".",
+      const ck = await ctx.dockerRun([...PROYECTO_RO("/src"), "-w", "/src", IMG.checkov, "-d", ".",
         "--framework", "terraform,dockerfile,github_actions", "--skip-path", "node_modules", "--skip-path", ".next", "--skip-path", "reportes",
         "--config-file", "security/checkov/.checkov.yaml", "--compact", "--quiet"]);
       ctx.log("");
       ctx.log("== Trivy config");
-      const tc = await ctx.dockerRun(["-v", "trivy-cache:/root/.cache", "-v", `${RAIZ}:/src:ro`, IMG.trivy, "config", "--quiet", "--severity", "CRITICAL,HIGH", "--exit-code", "1",
+      const tc = await ctx.dockerRun(["-v", "trivy-cache:/root/.cache", ...PROYECTO_RO("/src"), IMG.trivy, "config", "--quiet", "--severity", "CRITICAL,HIGH", "--exit-code", "1",
         "--skip-dirs", "/src/node_modules", "--skip-dirs", "/src/.next", "/src"]);
       if (ck === 0 && tc === 0) return { resultado: "aprobada", resumen: "Checkov y Trivy config sin fallos" };
       return { resultado: "fallida", resumen: `Checkov: código ${ck}; Trivy config: código ${tc}` };
@@ -280,7 +292,7 @@ export const PRUEBAS = [
       ctx.log("");
       ctx.log("== Qué reglas del CRS detuvieron cada ataque (log de auditoría JSON de ModSecurity)");
       await new Promise((r) => setTimeout(r, 1500));
-      const log = await ctx.capturar(ctx.docker, ["compose", "logs", "waf", "--since", "1m", "--no-log-prefix"]);
+      const log = await ctx.capturar(ctx.docker, ["logs", "ventas-waf", "--since", "1m"]);
       const reglas = new Set();
       for (const l of log.split("\n")) {
         if (!l.startsWith('{"transaction"')) continue;
@@ -319,6 +331,7 @@ export const PRUEBAS = [
     duracion: "10 s",
     reportes: [],
     async ejecutar(ctx) {
+      ultimaFuerzaBruta = Date.now();
       const codigos = [];
       for (let i = 1; i <= 20; i++) {
         try {
@@ -380,8 +393,10 @@ export const PRUEBAS = [
     reportes: [{ nombre: "Reporte HTML de ZAP", ruta: "zap/zap-baseline.html" }],
     async ejecutar(ctx) {
       asegurarDir("zap");
-      copyFileSync(path.join(RAIZ, "security", "zap", "rules.tsv"), rep("zap", "rules.tsv"));
-      const c = await ctx.dockerRun(["--add-host=host.docker.internal:host-gateway", "-v", `${rep("zap")}:/zap/wrk:rw`, IMG.zap,
+      // Lectura + escritura (no copyFile): en una carpeta de Windows montada en el contenedor, copyFile
+      // intenta conservar permisos y falla con EPERM.
+      writeFileSync(rep("zap", "rules.tsv"), readFileSync(path.join(RAIZ, "security", "zap", "rules.tsv")));
+      const c = await ctx.dockerRun(["--add-host=host.docker.internal:host-gateway", ...REPORTE("zap", "/zap/wrk"), IMG.zap,
         "zap-baseline.py", "-t", "http://host.docker.internal:8080", "-c", "rules.tsv", "-r", "zap-baseline.html", "-J", "zap-baseline.json", "-a", "-j", "-I"]);
       return porCodigo(c, 0, "Sin fallos (las advertencias están aceptadas)", "ZAP encontró fallos");
     },
@@ -415,6 +430,12 @@ export const PRUEBAS = [
     duracion: "1 min",
     reportes: [],
     async ejecutar(ctx) {
+      const espera = 60_000 - (Date.now() - ultimaFuerzaBruta);
+      if (espera > 0) {
+        ctx.log(`La prueba de fuerza bruta agotó hace poco el límite de nginx (10 formularios/min por IP).`);
+        ctx.log(`Esperando ${Math.ceil(espera / 1000)} s a que se libere: es el control funcionando, no un error.`);
+        await new Promise((r) => setTimeout(r, espera));
+      }
       ctx.log("Reiniciando los contadores de rate limit de la app (las pruebas crean usuarios)…");
       await ctx.correr(ctx.docker, ["exec", "ventas-db", "sh", "-c", 'MYSQL_PWD=$MYSQL_ROOT_PASSWORD mysql -uroot ventas_segura -e "DELETE FROM rate_limit"']);
       const c = await ctx.correr(process.execPath, [path.join(RAIZ, "node_modules", "@playwright", "test", "cli.js"), "test", "e2e/cabeceras.spec.ts", "e2e/compra.spec.ts", "--reporter=line"], {
@@ -478,7 +499,12 @@ export const PRUEBAS = [
     duracion: "20 s",
     reportes: [],
     async ejecutar(ctx) {
-      const c = await ctx.correr(ctx.docker, ["compose", "--profile", "tareas", "run", "--rm", "tareas", "npx", "tsx", "--conditions=react-server", "scripts/verificar-auditoria.ts"]);
+      // docker run explícito (no "compose run"): funciona igual desde el equipo y desde el contenedor del panel.
+      const c = await ctx.correr(ctx.docker, ["run", "--rm", "--network", "ventas-online-segura_backend",
+        "--env-file", path.join(RAIZ, ".env.docker"), "-w", "/app",
+        ...montaje(rutaHost("src"), "/app/src", true), ...montaje(rutaHost("scripts"), "/app/scripts", true),
+        ...montaje(rutaHost("tsconfig.json"), "/app/tsconfig.json", true),
+        "ventas-online-segura-tareas:local", "npx", "tsx", "--conditions=react-server", "scripts/verificar-auditoria.ts"]);
       return porCodigo(c, 0, "La cadena de auditoría está íntegra", "La cadena de auditoría fue alterada o no se pudo verificar");
     },
   },
