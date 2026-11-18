@@ -58,3 +58,7 @@ infra/terraform/aws/terraform.tfvars
 /playwright-report/
 /test-results/
 /e2e/.auth/
+
+# Instrucciones locales para asistentes de IA (viven fuera del repositorio)
+/AGENTS.md
+/CLAUDE.md

@@ -18,6 +18,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false, // no revelar "X-Powered-By: Next.js"
   productionBrowserSourceMaps: false,
+  agentRules: false, // `next dev` no genera AGENTS.md en el repositorio
   experimental: {
     serverActions: {
       bodySizeLimit: "5mb", // carga de imágenes (2 MB c/u) en el panel admin
